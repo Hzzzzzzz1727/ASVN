@@ -1120,4 +1120,165 @@ onMounted(() => {
   background-color: #fff3cd !important;
   border-left: 5px solid #ffc107 !important;
 }
+/* RESPONSIVE FIX */
+.page-wrap { 
+  min-height: 100vh; 
+  padding: 1rem 0.75rem;  /* ← Giảm padding trên mobile */
+  background: #f1f5f9; 
+}
+
+.layout { 
+  max-width: 1450px; 
+  margin: 0 auto; 
+  display: flex; 
+  flex-direction: column; 
+  gap: 1rem;  /* ← Giảm gap */
+}
+
+.control-card, .cases-section { 
+  background: white; 
+  border-radius: 16px;  /* ← Giảm từ 20px */
+  padding: 1rem;  /* ← Giảm từ 1.5rem */
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); 
+}
+
+/* CASE STRIP - FIX RESPONSIVE */
+.case-strip { 
+  display: grid; 
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));  /* ← Responsive */
+  gap: 1rem;  /* ← Giảm từ 1.25rem */
+}
+
+@media (max-width: 1200px) { 
+  .case-strip { grid-template-columns: repeat(2, 1fr); } 
+}
+
+@media (max-width: 768px) { 
+  .case-strip { 
+    grid-template-columns: 1fr;  /* ← Full width trên mobile */
+  }
+  
+  .control-card, .cases-section {
+    padding: 0.75rem;
+    border-radius: 12px;
+  }
+  
+  .page-wrap {
+    padding: 0.75rem 0.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .case-strip {
+    gap: 0.75rem;
+  }
+  
+  .control-card, .cases-section {
+    padding: 0.75rem 0.5rem;
+  }
+  
+  .toggle-row {
+    flex-direction: column;
+  }
+  
+  .toggle-row button {
+    font-size: 0.9rem;
+    padding: 0.5rem !important;
+  }
+  
+  .control-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  
+  .card-body {
+    padding: 0.75rem !important;
+  }
+  
+  .fw-bold {
+    font-size: 0.95rem;
+  }
+  
+  .small {
+    font-size: 0.8rem;
+  }
+  
+  .modal-dialog {
+    margin: 0.5rem;
+  }
+}
+
+/* MEDIA GRID - FIX */
+.media-grid { 
+  display: grid; 
+  grid-template-columns: repeat(auto-fill, minmax(50px, 1fr)); 
+  gap: 6px;  /* ← Giảm từ 8px */
+}
+
+@media (max-width: 480px) {
+  .media-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* TOGGLE BUTTONS */
+.toggle-row { 
+  display: flex; 
+  gap: 0.5rem;  /* ← Giảm từ 10px */
+  margin-bottom: 1rem;
+  flex-wrap: wrap;  /* ← Cho phép wrap */
+}
+
+.toggle-row button {
+  font-size: 0.9rem;
+  padding: 0.5rem 0.75rem;  /* ← Nhỏ hơn */
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .toggle-row {
+    gap: 0.25rem;
+  }
+  
+  .toggle-row button {
+    font-size: 0.85rem;
+    padding: 0.4rem 0.5rem;
+    flex: 1 1 calc(33% - 2px);
+  }
+}
+
+/* SECTION TITLE */
+.section-title { 
+  font-weight: 800; 
+  color: #1e293b; 
+  font-size: 1.25rem;
+}
+
+@media (max-width: 480px) {
+  .section-title {
+    font-size: 1rem;
+  }
+}
+
+/* MODAL RESPONSIVE */
+.modal-dialog {
+  margin: 1rem;
+}
+
+@media (max-width: 480px) {
+  .modal-dialog {
+    margin: 0.5rem;
+    max-width: calc(100% - 1rem) !important;
+  }
+  
+  .modal-xl {
+    max-width: 95vw !important;
+  }
+}
+
+/* INPUT FIELDS */
+textarea, input[type="text"] {
+  font-size: 1rem;  /* Tránh zoom trên iOS */
+}
 </style>
