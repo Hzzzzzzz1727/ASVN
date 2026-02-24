@@ -1073,212 +1073,136 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* Giữ nguyên style cũ của anh */
-.page-wrap { min-height: 100vh; padding: 2rem 1rem; background: #f1f5f9; }
-.layout { max-width: 1450px; margin: 0 auto; display: flex; flex-direction: column; gap: 1.5rem; }
-.control-card, .cases-section { background: white; border-radius: 20px; padding: 1.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-.case-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; }
-@media (max-width: 1200px) { .case-strip { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 768px) { .case-strip { grid-template-columns: 1fr; } }
-.case-card { animation: fadeIn 0.4s ease-out; cursor: pointer; transition: transform 0.2s; }
-.case-card:hover { transform: translateY(-5px); }
-.card { transition: all 0.3s ease; border: 1px solid #e2e8f0 !important; }
-.card:hover { box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1) !important; }
-.media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(55px, 1fr)); gap: 8px; }
-.media-item { position: relative; aspect-ratio: 1; }
-.media-item img, .media-item video { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; cursor: pointer; transition: transform 0.15s; }
-.media-item img:hover, .media-item video:hover { transform: scale(1.05); }
-.media-del { position: absolute; top: -5px; right: -5px; background: red; color: white; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 12px; cursor: pointer; }
-.media-add { aspect-ratio: 1; border: 2px dashed #cbd5e0; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #94a3b8; font-size: 20px; }
-.media-grid-mini { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
-.media-item-mini { width: 40px; height: 40px; }
-.media-item-mini img, .media-item-mini video { width: 100%; height: 100%; object-fit: cover; border-radius: 4px; border: 1px solid #ddd; cursor: pointer; }
-.date-pill { background: #10b981; color: white; padding: 6px 16px; border-radius: 20px; font-weight: bold; }
-.toggle-row { display: flex; gap: 10px; margin-bottom: 1rem; }
-.control-actions { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; margin-top: 10px; }
-.section-title { font-weight: 800; color: #1e293b; font-size: 1.25rem; }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-
-/* Modal media & chi tiết ca */
-.media-modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.9); display: flex; align-items: center; justify-content: center; z-index: 1000; cursor: pointer; }
-.media-modal-content { position: relative; max-width: 90vw; max-height: 90vh; background: #000; border-radius: 12px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.6); }
-.modal-media { max-width: 100%; max-height: 90vh; object-fit: contain; display: block; }
-.modal-close { position: absolute; top: 15px; right: 20px; background: rgba(0,0,0,0.5); color: white; border: none; font-size: 32px; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; z-index: 10; }
-.modal-close:hover { background: rgba(255,0,0,0.8); }
-
-/* Modal chi tiết ca hoàn thành */
-.modal-xl { max-width: 1100px; }
-.modal-header.bg-success { background-color: #198754 !important; }
-.btn-close-white { filter: invert(1); }
-/*Css nút seleclocal*/
-.modal-header.bg-info { background-color: #17a2b8 !important; }
-.btn-info { background-color: #17a2b8; border-color: #17a2b8; }
-.list-group-item-action:hover { background-color: #f8f9fa; }
-.spinner-border { width: 3rem; height: 3rem; }
-
-.list-group-item-warning {
-  background-color: #fff3cd !important;
-  border-left: 5px solid #ffc107 !important;
-}
-/* RESPONSIVE FIX */
-.page-wrap { 
-  min-height: 100vh; 
-  padding: 1rem 0.75rem;  /* ← Giảm padding trên mobile */
-  background: #f1f5f9; 
+/* Base */
+.page-wrap {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
+  padding: 1rem 0.75rem;
+  font-family: system-ui, -apple-system, sans-serif;
 }
 
-.layout { 
-  max-width: 1450px; 
-  margin: 0 auto; 
-  display: flex; 
-  flex-direction: column; 
-  gap: 1rem;  /* ← Giảm gap */
+/* Control Card - đẹp, nổi khối */
+.control-card {
+  background: white;
+  border-radius: 1.25rem;
+  padding: 1.25rem;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+  border: 1px solid rgba(229, 231, 235, 0.6);
 }
 
-.control-card, .cases-section { 
-  background: white; 
-  border-radius: 16px;  /* ← Giảm từ 20px */
-  padding: 1rem;  /* ← Giảm từ 1.5rem */
-  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); 
-}
-
-/* CASE STRIP - FIX RESPONSIVE */
-.case-strip { 
-  display: grid; 
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));  /* ← Responsive */
-  gap: 1rem;  /* ← Giảm từ 1.25rem */
-}
-
-@media (max-width: 1200px) { 
-  .case-strip { grid-template-columns: repeat(2, 1fr); } 
-}
-
-@media (max-width: 768px) { 
-  .case-strip { 
-    grid-template-columns: 1fr;  /* ← Full width trên mobile */
-  }
-  
-  .control-card, .cases-section {
-    padding: 0.75rem;
-    border-radius: 12px;
-  }
-  
-  .page-wrap {
-    padding: 0.75rem 0.5rem;
-  }
-}
-
-@media (max-width: 480px) {
-  .case-strip {
-    gap: 0.75rem;
-  }
-  
-  .control-card, .cases-section {
-    padding: 0.75rem 0.5rem;
-  }
-  
-  .toggle-row {
-    flex-direction: column;
-  }
-  
-  .toggle-row button {
-    font-size: 0.9rem;
-    padding: 0.5rem !important;
-  }
-  
-  .control-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-  
-  .card-body {
-    padding: 0.75rem !important;
-  }
-  
-  .fw-bold {
-    font-size: 0.95rem;
-  }
-  
-  .small {
-    font-size: 0.8rem;
-  }
-  
-  .modal-dialog {
-    margin: 0.5rem;
-  }
-}
-
-/* MEDIA GRID - FIX */
-.media-grid { 
-  display: grid; 
-  grid-template-columns: repeat(auto-fill, minmax(50px, 1fr)); 
-  gap: 6px;  /* ← Giảm từ 8px */
-}
-
-@media (max-width: 480px) {
-  .media-grid {
-    grid-template-columns: repeat(4, 1fr);
-  }
-}
-
-/* TOGGLE BUTTONS */
-.toggle-row { 
-  display: flex; 
-  gap: 0.5rem;  /* ← Giảm từ 10px */
-  margin-bottom: 1rem;
-  flex-wrap: wrap;  /* ← Cho phép wrap */
+/* Toggle Buttons - hiện đại, hover đẹp */
+.toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
 }
 
 .toggle-row button {
-  font-size: 0.9rem;
-  padding: 0.5rem 0.75rem;  /* ← Nhỏ hơn */
-  white-space: nowrap;
+  flex: 1;
+  padding: 0.875rem 1rem;
+  font-weight: 600;
+  border-radius: 1rem;
+  transition: all 0.3s;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
 }
 
-@media (max-width: 480px) {
+.toggle-row button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.15);
+}
+
+/* Case Strip - responsive, card đẹp */
+.case-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.25rem;
+}
+
+.case-card {
+  border-radius: 1.25rem;
+  overflow: hidden;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.case-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+}
+
+/* Card Body */
+.card-body {
+  padding: 1.5rem;
+  background: white;
+}
+
+/* Media Grid - gọn, đẹp */
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(70px, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.media-item {
+  aspect-ratio: 1;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  transition: transform 0.2s;
+}
+
+.media-item:hover {
+  transform: scale(1.05);
+}
+
+.media-del {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background: #ef4444;
+  color: white;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* Modal - đẹp, bo tròn */
+.modal-content {
+  border-radius: 1.5rem;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .case-strip {
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .page-wrap {
+    padding: 0.75rem 0.5rem;
+  }
+  
+  .control-card, .cases-section {
+    padding: 1rem;
+    border-radius: 1rem;
+  }
+  
   .toggle-row {
-    gap: 0.25rem;
+    flex-direction: column;
   }
   
-  .toggle-row button {
-    font-size: 0.85rem;
-    padding: 0.4rem 0.5rem;
-    flex: 1 1 calc(33% - 2px);
+  .case-strip {
+    grid-template-columns: 1fr;
   }
-}
-
-/* SECTION TITLE */
-.section-title { 
-  font-weight: 800; 
-  color: #1e293b; 
-  font-size: 1.25rem;
-}
-
-@media (max-width: 480px) {
-  .section-title {
-    font-size: 1rem;
-  }
-}
-
-/* MODAL RESPONSIVE */
-.modal-dialog {
-  margin: 1rem;
-}
-
-@media (max-width: 480px) {
-  .modal-dialog {
-    margin: 0.5rem;
-    max-width: calc(100% - 1rem) !important;
-  }
-  
-  .modal-xl {
-    max-width: 95vw !important;
-  }
-}
-
-/* INPUT FIELDS */
-textarea, input[type="text"] {
-  font-size: 1rem;  /* Tránh zoom trên iOS */
 }
 </style>
