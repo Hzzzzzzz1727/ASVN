@@ -49,7 +49,6 @@ export function useTicketParser(onSuccess = () => {}) {
 
   // ✅ Parse CSVN - format có label rõ ràng
   const handleParseCsvn = async (text) => {
-    // ticketId
     const ticketMatch = text.match(/Mã Thông Tin[:\s]+([A-Z0-9]+)/i)
     const ticketId = ticketMatch ? ticketMatch[1].trim() : null
     if (!ticketId) {
@@ -57,7 +56,6 @@ export function useTicketParser(onSuccess = () => {}) {
       return
     }
 
-    // Check trùng
     const { data: exist } = await supabase
       .from('customers').select('ticketId').eq('ticketId', ticketId).maybeSingle()
     if (exist) {
@@ -66,54 +64,35 @@ export function useTicketParser(onSuccess = () => {}) {
       return
     }
 
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
-
-    // name
     const nameMatch = text.match(/Tên KH[:\s]+(.+)/i)
     const name = nameMatch ? nameMatch[1].trim() : DEFAULTS.NAME
 
-    // phone
     const phoneMatch = text.match(/SĐT[:\s]+([\d]+)/i)
     const phone = phoneMatch ? phoneMatch[1].trim() : DEFAULTS.PHONE
 
-    // address: ưu tiên địa chỉ mới, fallback địa chỉ cũ
     const addressNewMatch = text.match(/Địa chỉ[:\s]+(?!cũ)(.+)/i)
     const addressOldMatch = text.match(/Địa chỉ cũ[:\s]+(.+)/i)
     const address = (addressNewMatch ? addressNewMatch[1].trim() : null)
       || (addressOldMatch ? addressOldMatch[1].trim() : DEFAULTS.ADDRESS)
 
-    // model
     const modelMatch = text.match(/Model[:\s]+(.+)/i)
     const model = modelMatch ? modelMatch[1].trim() : DEFAULTS.MODEL
 
-    // issue
     const issueMatch = text.match(/Tình Trạng[:\s]+(.+)/i)
     const issue = issueMatch ? issueMatch[1].trim() : DEFAULTS.ISSUE
 
-    // serial
     const serialMatch = text.match(/Số Serial[:\s]+(.+)/i)
     const serial = serialMatch ? serialMatch[1].trim() : ''
 
-    // branch (Trạm)
     const branchMatch = text.match(/Trạm[:\s]+(.+)/i)
     const branch = branchMatch ? branchMatch[1].trim() : ''
 
     const newCustomer = {
-      ticketId,
-      name,
-      phone,
-      model,
-      address,
-      issue,
-      media: [],
-      folderDrive: '',
-      status: 0,
-      replacedPart: DEFAULTS.REPLACED_PART,
-      doneDate: null,
+      ticketId, name, phone, model, address, issue,
+      media: [], folderDrive: '', status: 0,
+      replacedPart: DEFAULTS.REPLACED_PART, doneDate: null,
       createdAt: new Date().toISOString(),
-      warehouse: '',
-      serial,
-      branch
+      warehouse: '', serial, branch
     }
 
     console.log('📋 Ca CSVN sẽ lưu:', JSON.stringify(newCustomer, null, 2))
@@ -129,12 +108,11 @@ export function useTicketParser(onSuccess = () => {}) {
     }
   }
 
-  // ✅ Parse ASVN TDP - giữ nguyên
+  // ✅ Parse ASVN TDP
   const handleParse = async (manualText = null) => {
     const text = (manualText || rawInput.value || '').trim()
     if (!text) return
 
-    // Nhận dạng CSVN → chuyển sang handleParseCsvn
     if (text.includes('Mã Thông Tin') || text.match(/CSVN\d+/i)) {
       await handleParseCsvn(text)
       return
@@ -160,36 +138,52 @@ export function useTicketParser(onSuccess = () => {}) {
 
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
 
-    const phone = extractField(lines,
+    // ✅ Phone - bắt cả +84, normalize về 0
+    const phoneRaw = extractField(lines,
       ['số điện thoại', 'phone', 'sdt', 'tel'],
-      line => line.match(/(?:0|\+84)[3-9][0-9\s.-]{8,10}/)?.[0].replace(/[^0-9+]/g, '')
-    ) || DEFAULTS.PHONE
+      line => line.match(/(?:\+84|0)[3-9][0-9]{8}/)?.[0]
+    ) || ''
+    const phone = phoneRaw.replace(/^\+84/, '0') || DEFAULTS.PHONE
 
-    const name = extractField(lines,
-      ['customer name', 'tên khách', 'khách hàng', 'tên:'],
-      line => line.replace(/Customer Name:?|Tên khách hàng?:?|Khách hàng?:?|Tên?:?/i, '').trim()
-    ) || DEFAULTS.NAME
+    // ✅ Name - ưu tiên label tiếng Việt
+    const nameMatch = text.match(/^Tên khách hàng\s*:\s*(.+?)$/im)
+    let finalName = nameMatch ? nameMatch[1].trim() : null
 
-    let finalName = name
+    if (!finalName) {
+      finalName = extractField(lines,
+        ['customer name', 'tên khách', 'khách hàng', 'tên:'],
+        line => line.replace(/Customer Name:?|Tên khách hàng?:?|Khách hàng?:?|Tên?:?/i, '').trim()
+      ) || DEFAULTS.NAME
+    }
+
     if (finalName === DEFAULTS.NAME) {
       const fallback = text.match(/(?:A |Chị |Anh |Bác |Ông |Bà |Khách )([^|\n,]+)/i)
       if (fallback) finalName = fallback[1].trim()
     }
 
-    const model = extractField(lines,
-      ['model', 'product model', 'thiết bị', 'tv model', 'xiaomi'],
-      line => {
-        if (line.toLowerCase().includes('serial') || line.toLowerCase().includes('s/n')) return null
-        return (line.match(/:\s*(.+)/) || line.match(/Model\s*(.+)/i))?.[1]?.trim()
-      }
-    )?.replace(/^xiaomi\s*/i, '').trim() || DEFAULTS.MODEL
+    // ✅ Model - ưu tiên dòng label đầu tiên (ngoài ngoặc kép)
+    const modelLabelMatch = text.match(/^model\s*:\s*(.+?)$/im)
+    const model = modelLabelMatch
+      ? modelLabelMatch[1].trim()
+      : (extractField(lines,
+          ['product model', 'thiết bị', 'tv model', 'xiaomi'],
+          line => {
+            if (line.toLowerCase().includes('serial') || line.toLowerCase().includes('s/n')) return null
+            return (line.match(/:\s*(.+)/) || line.match(/Model\s*(.+)/i))?.[1]?.trim()
+          }
+        )?.replace(/^xiaomi\s*/i, '').trim() || DEFAULTS.MODEL)
 
-    const issue = extractField(lines,
-      ['faulty description', 'hiện tượng', 'lỗi', 'vấn đề', 'problem description'],
-      line => (line.match(/:\s*(.+)/) || [])[1]?.trim()
-    ) || DEFAULTS.ISSUE
+    // ✅ Issue - lấy Faulty description bên trong ngoặc kép
+    const issueMatch = text.match(/Faulty description\s*:\s*(.+?)(?:\nCS handle:|")/is)
+    const issue = issueMatch
+      ? issueMatch[1].trim().replace(/\n/g, ' ')
+      : DEFAULTS.ISSUE
 
-    const address = parseAddress(lines)
+    // ✅ Address - ưu tiên label tiếng Việt đầu tiên
+    const addressLabelMatch = text.match(/^Địa chỉ\s*:\s*(.+?)$/im)
+    const address = addressLabelMatch
+      ? addressLabelMatch[1].trim()
+      : parseAddress(lines)
 
     const newCustomer = {
       ticketId,
@@ -206,6 +200,8 @@ export function useTicketParser(onSuccess = () => {}) {
       createdAt: new Date().toISOString(),
       warehouse: 'TDP'
     }
+
+    console.log('📋 Ca TDP sẽ lưu:', JSON.stringify(newCustomer, null, 2))
 
     const { error } = await supabase.from('customers').insert([newCustomer])
     if (!error) {
