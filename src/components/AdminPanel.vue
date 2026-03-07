@@ -144,7 +144,7 @@ onMounted(load)
 
         <!-- Actions -->
         <div class="ap-actions">
-          <button
+          <button v-if="p.id !== currentProfile?.id"
             :class="['btn-toggle', p.is_active ? 'btn-toggle--lock' : 'btn-toggle--unlock']"
             @click="handleToggle(p)">
             {{ p.is_active ? '🔒 Khóa' : '🔓 Mở' }}
@@ -202,6 +202,19 @@ onMounted(load)
 </template>
 
 <style scoped>
+/* Mobile */
+@media (max-width: 480px) {
+  .ap-card { flex-wrap: wrap; padding: 0.75rem; }
+  .ap-info { flex: 1 1 100%; }
+  .ap-actions { flex: 1 1 100%; justify-content: flex-end; margin-top: 0.4rem; border-top: 1px solid #e2e8f0; padding-top: 0.4rem; }
+  .ap-email { max-width: 180px; }
+  .ap-avatar { width: 34px; height: 34px; font-size: 0.9rem; }
+  .ap-name { font-size: 0.88rem; }
+  .btn-toggle { font-size: 0.75rem; padding: 0.3rem 0.55rem; }
+  .ap-title { font-size: 0.95rem; }
+  .btn-new { font-size: 0.8rem; padding: 0.45rem 0.8rem; }
+}
+
 /* Toast */
 .toast-stack { position: fixed; top: 5rem; right: 1rem; z-index: 9999; display: flex; flex-direction: column; gap: 0.4rem; }
 .t-item { padding: 0.65rem 1rem; border-radius: 10px; font-weight: 600; font-size: 0.88rem; color: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.15); animation: tin .3s ease; }
