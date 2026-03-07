@@ -7,14 +7,27 @@ import { useSupabaseCustomers } from '@/composables/useSupabaseCustomers'
 import { useTicketParser } from '@/composables/useTicketParser'
 import { useGeocodingAndRouting } from '@/composables/useGeocodingAndRouting'
 import { useLinhKienManager } from '@/composables/useLinhKienManager'
+import { useAuth } from '@/composables/useAuth'
 
-// === SUPABASE & CUSTOMERS ===
+import LoginPage from '@/components/LoginPage.vue'
+import AdminPanel from '@/components/AdminPanel.vue'
+
+// ── AUTH ──────────────────────────────────────────────────────
+const {
+  isLoggedIn, isAdmin, isNhanVien, isAuthLoading,
+  userName, userWarehouse, canDelete, canExport,
+  initAuth, logout
+} = useAuth()
+
+const showAdminPanel = ref(false)
+
+// ── SUPABASE ──────────────────────────────────────────────────
+const supabase = getSupabase()
 const searchQuery = ref('')
 const historySearchQuery = ref('')
-const { customers, loadData, loadMediaForItem, isLoading } = useSupabaseCustomers()
-const supabase = getSupabase()
+const { customers, loadData, loadMediaForItem } = useSupabaseCustomers()
 
-// === TOAST NOTIFICATION (thay alert native) ===
+// ── TOAST ─────────────────────────────────────────────────────
 const toasts = ref([])
 let toastId = 0
 const showToast = (message, type = 'success', duration = 3000) => {
@@ -23,159 +36,99 @@ const showToast = (message, type = 'success', duration = 3000) => {
   setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id) }, duration)
 }
 
-// === LOADING STATE ===
+// ── LOADING ───────────────────────────────────────────────────
 const isParsing = ref(false)
 
-// === TICKET PARSER ===
+// ── TICKET PARSER ─────────────────────────────────────────────
 const { rawInput, handleParse } = useTicketParser(loadData)
 
 const customHandleParse = async (text) => {
   if (!text || !text.trim()) return
   if (isParsing.value) return
   isParsing.value = true
-
   try {
     if (!text.includes('VN-NV') && !text.includes('NV-MSC')) {
       await handleParse(text)
       rawInput.value = ''
       return
     }
-
     const ticketIdMatch = text.match(/ASVN\d+/)
-    if (!ticketIdMatch) {
-      showToast('Không tìm thấy mã ASVN!', 'error')
-      return
-    }
+    if (!ticketIdMatch) { showToast('Không tìm thấy mã ASVN!', 'error'); return }
     const fullTicketId = ticketIdMatch[0].toUpperCase()
+    const { data: exist } = await supabase.from('customers').select('ticketId').eq('ticketId', fullTicketId).maybeSingle()
+    if (exist) { showToast(`Ca ${fullTicketId} đã tồn tại!`, 'warning'); rawInput.value = ''; return }
 
-    const { data: exist } = await supabase
-      .from('customers')
-      .select('ticketId')
-      .eq('ticketId', fullTicketId)
-      .maybeSingle()
-    if (exist) {
-      showToast(`Ca ${fullTicketId} đã tồn tại!`, 'warning')
-      rawInput.value = ''
-      return
-    }
-
-    // ✅ NAME
     const nameLabelMatch = text.match(/^Tên khách hàng\s*:\s*(.+?)$/im)
-    const nameShortMatch = text.replace(fullTicketId, '').trim().match(
-      /^((?:Anh|Chị|chị|Bác|bác|Ông|ông|Bà|bà|Chú|chú|Em|em|Cô|cô|A|C)\s+[^\s,|\n]+)/
-    )
+    const nameShortMatch = text.replace(fullTicketId, '').trim().match(/^((?:Anh|Chị|chị|Bác|bác|Ông|ông|Bà|bà|Chú|chú|Em|em|Cô|cô|A|C)\s+[^\s,|\n]+)/)
     const name = (nameLabelMatch?.[1] || nameShortMatch?.[1] || 'Khách NV').trim()
-
-    // ✅ PHONE
-    const phoneMatch = text.match(/(?:Số điện thoại|Phone Number)\s*:\s*([\+\d]+)/i)
-      || text.match(/(?<!\d)(?:\+84|0)[3-9][0-9]{8}(?!\d)/)
+    const phoneMatch = text.match(/(?:Số điện thoại|Phone Number)\s*:\s*([\+\d]+)/i) || text.match(/(?<!\d)(?:\+84|0)[3-9][0-9]{8}(?!\d)/)
     const phone = (phoneMatch?.[1] || phoneMatch?.[0] || '').replace(/^\+84/, '0')
-
-    // ✅ ADDRESS
-    const addressMatch = text.match(/^Địa chỉ\s*:\s*(.+?)$/im)
-      || text.match(/Customer address\s*:\s*(.+?)(?:\n|$)/i)
-      || text.match(/([^\n]+?(?:Quảng Nam|Đà Nẵng|QUẢNG NAM|ĐÀ NẴNG|Thành phố)[^\n]*)/i)
+    const addressMatch = text.match(/^Địa chỉ\s*:\s*(.+?)$/im) || text.match(/Customer address\s*:\s*(.+?)(?:\n|$)/i) || text.match(/([^\n]+?(?:Quảng Nam|Đà Nẵng|QUẢNG NAM|ĐÀ NẴNG|Thành phố)[^\n]*)/i)
     const address = (addressMatch?.[1] || 'Chưa bóc được địa chỉ').trim()
-
-    // ✅ MODEL
-    const modelMatch = text.match(/^model\s*:\s*(.+?)$/im)
-      || text.match(/Product model\s*:\s*(.+?)(?:\n|$)/i)
-      || text.match(/XIAOMI\s*-\s*(.+?)(?=\s*Serial|\s*VN-NV|\n)/i)
+    const modelMatch = text.match(/^model\s*:\s*(.+?)$/im) || text.match(/Product model\s*:\s*(.+?)(?:\n|$)/i) || text.match(/XIAOMI\s*-\s*(.+?)(?=\s*Serial|\s*VN-NV|\n)/i)
     const model = (modelMatch?.[1] || 'Xiaomi TV').trim()
-
-    // ✅ SERIAL
     const serialMatch = text.match(/(?:IMEI\s*\/\s*SN|SN|Serial)\s*:\s*([A-Z0-9\/]+)/i)
     const serial = serialMatch?.[1]?.trim() || ''
-
-    // ✅ BRANCH
     const branchMatch = text.match(/VN-NV-MSC-[^\s,\n]+/i)
     const branch = branchMatch?.[0]?.trim() || 'VN-NV-MSC-Đà Nẵng'
-
-    // ✅ ISSUE
     const issueMatch = text.match(/Faulty description\s*:\s*(.+?)(?:\nCS handle:|"|\n\n|$)/is)
     const issue = issueMatch ? issueMatch[1].trim().replace(/\n/g, ' ') : 'Bảo hành TV'
 
     const newCa = {
-      ticketId: fullTicketId,
-      name, phone, model, address, issue,
-      media: [], folderDrive: '', status: 0,
-      replacedPart: 'Chưa có', doneDate: null,
-      createdAt: new Date().toISOString(),
+      ticketId: fullTicketId, name, phone, model, address, issue,
+      media: [], folderDrive: '', status: 0, replacedPart: 'Chưa có',
+      doneDate: null, createdAt: new Date().toISOString(),
       warehouse: 'NV', serial, branch
     }
-
     const { error } = await supabase.from('customers').insert([newCa])
-    if (error) {
-      showToast('Lỗi lưu ca NV: ' + error.message, 'error')
-    } else {
-      showToast(`✅ Đã lưu ca NV: ${fullTicketId} - ${name}`, 'success')
-      await loadData()
-    }
+    if (error) showToast('Lỗi lưu ca NV: ' + error.message, 'error')
+    else { showToast(`✅ Đã lưu: ${fullTicketId} - ${name}`, 'success'); await loadData() }
     rawInput.value = ''
-  } finally {
-    isParsing.value = false
-  }
+  } finally { isParsing.value = false }
 }
 
-// === ROUTING ===
+// ── ROUTING ───────────────────────────────────────────────────
 const routing = useGeocodingAndRouting({ value: customers })
-const {
-  currentLocation, currentCoords, showRouteModal,
-  routeCustomers, isLoadingRoute,
-  openRouteModal, closeRouteModal, calculateRoute
-} = routing
+const { currentLocation, currentCoords, showRouteModal, routeCustomers, isLoadingRoute, openRouteModal, closeRouteModal, calculateRoute } = routing
 
-// === LINH KIỆN MANAGER ===
+// ── LINH KIỆN ─────────────────────────────────────────────────
 const linhKien = useLinhKienManager(loadData)
-const {
-  searchTicketId, newReplacedPart, editingPart,
-  showPartModal, linhKienList,
-  showCustomInput, customPartInput, confirmCustomPart,
-  openPartModal, closePartModal, selectPart,
-  loadPartForEdit, saveLinhKien, deleteLinhKien
-} = linhKien
+const { searchTicketId, newReplacedPart, editingPart, showPartModal, linhKienList, showCustomInput, customPartInput, confirmCustomPart, openPartModal, closePartModal, selectPart, loadPartForEdit, saveLinhKien, deleteLinhKien } = linhKien
 
-// === LOẠI CA VÀ KHO ===
-const currentType = ref('ASVN')
-const showWarehouse = ref(true)
+// ── STATE ─────────────────────────────────────────────────────
+const currentType     = ref('ASVN')
+const showWarehouse   = ref(true)
 const currentWarehouse = ref('TDP')
-const isEditingLink = ref({})
-const tempFolderLink = ref({})
+const isEditingLink   = ref({})
+const tempFolderLink  = ref({})
+const showTab         = ref('danglam')
+const outsideTab      = ref('danglam')
 
-// === TABS ===
-const showTab = ref('danglam')
-// Tab riêng cho Ca Ngoài
-const outsideTab = ref('danglam')
+// ── MODALS ────────────────────────────────────────────────────
+const showDetailModal       = ref(false)
+const selectedCustomer      = ref(null)
+const editingPart2          = ref('')
+const showModal             = ref(false)
+const modalMedia            = ref(null)
+const showTreModal          = ref(false)
+const showOutsideForm       = ref(false)
+const outsideForm           = ref({ name: '', phone: '', brand: '', model: '', issue: '' })
+const showOutsideDetailModal = ref(false)
+const selectedOutside       = ref(null)
+const editingOutsidePart    = ref('')
 
-// === MODALS ===
-const showDetailModal = ref(false)
-const selectedCustomer = ref(null)
-const showModal = ref(false)
-const modalMedia = ref(null)
-const showTreModal = ref(false)
-const showOutsideForm = ref(false)
-const outsideForm = ref({ name: '', phone: '', brand: '', model: '', issue: '' })
-
-// === MODAL CHI TIẾT CHUNG (dùng cho cả ASVN đang làm / chờ) ===
-const openDetailModal = async (customer) => {
+// ── MODAL HANDLERS ────────────────────────────────────────────
+const openDetailModalFull = async (customer) => {
   selectedCustomer.value = { ...customer, media: [] }
+  editingPart2.value = customer.replacedPart || ''
   showDetailModal.value = true
   document.body.style.overflow = 'hidden'
   const media = await loadMediaForItem(customer.id)
-  if (selectedCustomer.value) {
-    selectedCustomer.value = { ...selectedCustomer.value, media }
-  }
+  if (selectedCustomer.value) selectedCustomer.value = { ...selectedCustomer.value, media }
 }
 const closeDetailModal = () => {
-  showDetailModal.value = false
-  selectedCustomer.value = null
-  document.body.style.overflow = ''
+  showDetailModal.value = false; selectedCustomer.value = null; document.body.style.overflow = ''
 }
-
-// === MODAL CHI TIẾT CA NGOÀI ===
-const showOutsideDetailModal = ref(false)
-const selectedOutside = ref(null)
-const editingOutsidePart = ref('')
 
 const openOutsideDetailModal = async (item) => {
   selectedOutside.value = { ...item, media: [] }
@@ -183,27 +136,116 @@ const openOutsideDetailModal = async (item) => {
   showOutsideDetailModal.value = true
   document.body.style.overflow = 'hidden'
   const media = await loadMediaForItem(item.id)
-  if (selectedOutside.value) {
-    selectedOutside.value = { ...selectedOutside.value, media }
-  }
+  if (selectedOutside.value) selectedOutside.value = { ...selectedOutside.value, media }
 }
-
 const closeOutsideDetailModal = () => {
-  showOutsideDetailModal.value = false
-  selectedOutside.value = null
-  document.body.style.overflow = ''
+  showOutsideDetailModal.value = false; selectedOutside.value = null; document.body.style.overflow = ''
 }
 
-const saveOutsidePart = async () => {
-  if (!selectedOutside.value) return
-  await supabase.from('customers')
-    .update({ replacedPart: editingOutsidePart.value })
-    .eq('id', selectedOutside.value.id)
-  selectedOutside.value.replacedPart = editingOutsidePart.value
+const openTreModal   = () => showTreModal.value = true
+const closeTreModal  = () => showTreModal.value = false
+const openMediaModal = (media) => { modalMedia.value = media; showModal.value = true; document.body.style.overflow = 'hidden' }
+const closeMediaModal = () => { showModal.value = false; modalMedia.value = null; document.body.style.overflow = '' }
+
+// ── NAVIGATION ────────────────────────────────────────────────
+const backToTypeToggle = () => { showWarehouse.value = false; currentType.value = 'ASVN' }
+const selectWarehouse  = (wh) => { currentWarehouse.value = wh; searchQuery.value = '' }
+const selectType = (type) => {
+  currentType.value = type; showTab.value = 'danglam'; outsideTab.value = 'danglam'
+  searchQuery.value = ''; historySearchQuery.value = ''
+  if (type === 'ASVN') showWarehouse.value = true
+}
+
+// ── COMPUTED ──────────────────────────────────────────────────
+const filteredCustomers = computed(() => {
+  let f = customers.value
+  if (currentType.value === 'ASVN')    f = f.filter(c => c.ticketId?.startsWith('ASVN'))
+  else if (currentType.value === 'CSVN')   f = f.filter(c => c.ticketId?.startsWith('CSVN'))
+  else if (currentType.value === 'OUTSIDE') f = f.filter(c => c.ticketId?.startsWith('NGOAI'))
+  if (currentType.value === 'ASVN' && showWarehouse.value && !searchQuery.value)
+    f = f.filter(c => c.warehouse === currentWarehouse.value)
+  const q = searchQuery.value.toLowerCase()
+  return f.filter(c =>
+    c.name?.toLowerCase().includes(q) || c.phone?.includes(q) ||
+    c.ticketId?.toLowerCase().includes(q) || c.model?.toLowerCase().includes(q) ||
+    c.replacedPart?.toLowerCase().includes(q)
+  )
+})
+
+const dangLam     = computed(() => filteredCustomers.value.filter(c => c.status === 0))
+const choLinhKien = computed(() => filteredCustomers.value.filter(c => c.status === 1))
+const hoanThanh   = computed(() => {
+  const q = historySearchQuery.value.toLowerCase()
+  let items = filteredCustomers.value.filter(c => c.status === 2)
+  if (q) items = items.filter(c =>
+    c.name?.toLowerCase().includes(q) || c.phone?.includes(q) ||
+    c.ticketId?.toLowerCase().includes(q) || c.model?.toLowerCase().includes(q) ||
+    c.replacedPart?.toLowerCase().includes(q)
+  )
+  const groups = {}
+  items.forEach(item => { const d = item.doneDate || 'N/A'; if (!groups[d]) groups[d] = []; groups[d].push(item) })
+  return groups
+})
+const outsideDangLam    = computed(() => filteredCustomers.value.filter(c => c.status === 0))
+const outsideChoLinhKien = computed(() => filteredCustomers.value.filter(c => c.status === 1))
+const outsideHoanThanh  = computed(() => filteredCustomers.value.filter(c => c.status === 2))
+const treCaList = computed(() => {
+  const now = Date.now()
+  return filteredCustomers.value.filter(c => c.status === 0 && c.createdAt && now - new Date(c.createdAt).getTime() > 86400000)
+})
+
+const getWarehouseLabel = (item) => item.warehouse === 'TDP' ? 'Kho TDP' : item.warehouse === 'NV' ? 'Kho NV' : ''
+const getWarehouseBadgeClass = (wh) => wh === 'TDP' ? 'bg-primary' : 'bg-success'
+
+// ── CA NGOÀI ──────────────────────────────────────────────────
+const openOutsideForm  = () => { showOutsideForm.value = true; outsideForm.value = { name: '', phone: '', brand: '', model: '', issue: '' } }
+const closeOutsideForm = () => showOutsideForm.value = false
+const saveOutsideCa = async () => {
+  if (!outsideForm.value.phone || !outsideForm.value.issue) { showToast('Vui lòng nhập SĐT và tình trạng TV!', 'error'); return }
+  const now = new Date()
+  const ticketId = `NGOAI-${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2,'0')}${now.getDate().toString().padStart(2,'0')}-${now.getHours().toString().padStart(2,'0')}${now.getMinutes().toString().padStart(2,'0')}${now.getSeconds().toString().padStart(2,'0')}`
+  const newCa = {
+    ticketId, name: outsideForm.value.name.trim() || 'Khách ngoài',
+    phone: outsideForm.value.phone,
+    model: `${outsideForm.value.brand} ${outsideForm.value.model}`.trim() || 'Chưa rõ',
+    address: 'Ca ngoài - không có địa chỉ', issue: outsideForm.value.issue,
+    media: [], folderDrive: '', status: 0, replacedPart: 'Chưa có linh kiện thay',
+    doneDate: null, createdAt: now.toISOString(), warehouse: 'TDP'
+  }
+  const { error } = await supabase.from('customers').insert([newCa])
+  if (error) { showToast('Lỗi lưu ca ngoài: ' + error.message, 'error'); return }
+  showToast('Đã nhận ca ngoài! Mã: ' + ticketId, 'success')
+  closeOutsideForm(); loadData()
+}
+
+// ── TRẠNG THÁI ────────────────────────────────────────────────
+const hoanTatKiemTra = async (item, event) => {
+  if (!confirm(`Chuyển ca ${item.ticketId} sang "Chờ linh kiện"?`)) { event.target.checked = false; return }
+  await supabase.from('customers').update({ status: 1 }).eq('id', item.id)
+  await loadData(); showToast('Đã chuyển sang chờ linh kiện!', 'success')
+}
+const dongCa = async (item) => {
+  if (!confirm(`Chốt hoàn thành ca ${item.ticketId}?`)) return
+  const now = new Date()
+  const dateStr = `${now.getDate().toString().padStart(2,'0')}/${(now.getMonth()+1).toString().padStart(2,'0')}/${now.getFullYear()}`
+  await supabase.from('customers').update({ status: 2, doneDate: dateStr }).eq('id', item.id)
+  await loadData(); showToast('Đã chốt ca hoàn thành!', 'success')
+}
+const revertToDangLam = async (item) => {
+  await supabase.from('customers').update({ status: 0, doneDate: null }).eq('id', item.id)
   await loadData()
-  showToast('Đã lưu linh kiện!', 'success')
+  if (showDetailModal.value) closeDetailModal()
+  showToast('Đã hoàn lại trạng thái đang làm!', 'warning')
 }
-
+const changeStatus = async (item, status) => {
+  if (!selectedCustomer.value) return
+  const now = new Date()
+  const dateStr = `${now.getDate().toString().padStart(2,'0')}/${(now.getMonth()+1).toString().padStart(2,'0')}/${now.getFullYear()}`
+  const updates = status === 2 ? { status, doneDate: dateStr } : { status, doneDate: null }
+  await supabase.from('customers').update(updates).eq('id', item.id)
+  selectedCustomer.value = { ...selectedCustomer.value, ...updates }
+  await loadData(); showToast('Đã cập nhật trạng thái!', 'success')
+}
 const changeOutsideStatus = async (status) => {
   if (!selectedOutside.value) return
   const now = new Date()
@@ -211,175 +253,50 @@ const changeOutsideStatus = async (status) => {
   const updates = status === 2 ? { status, doneDate: dateStr } : { status, doneDate: null }
   await supabase.from('customers').update(updates).eq('id', selectedOutside.value.id)
   selectedOutside.value = { ...selectedOutside.value, ...updates }
-  await loadData()
-  showToast('Đã cập nhật trạng thái!', 'success')
+  await loadData(); showToast('Đã cập nhật trạng thái!', 'success')
+}
+const savePartInModal = async () => {
+  if (!selectedCustomer.value) return
+  await supabase.from('customers').update({ replacedPart: editingPart2.value }).eq('id', selectedCustomer.value.id)
+  selectedCustomer.value.replacedPart = editingPart2.value
+  await loadData(); showToast('Đã lưu linh kiện!', 'success')
+}
+const saveOutsidePart = async () => {
+  if (!selectedOutside.value) return
+  await supabase.from('customers').update({ replacedPart: editingOutsidePart.value }).eq('id', selectedOutside.value.id)
+  selectedOutside.value.replacedPart = editingOutsidePart.value
+  await loadData(); showToast('Đã lưu linh kiện!', 'success')
 }
 
-const openTreModal = () => showTreModal.value = true
-const closeTreModal = () => showTreModal.value = false
-
-const openMediaModal = (media) => {
-  modalMedia.value = media
-  showModal.value = true
-  document.body.style.overflow = 'hidden'
-}
-const closeMediaModal = () => {
-  showModal.value = false
-  modalMedia.value = null
-  document.body.style.overflow = ''
-}
-
-const backToTypeToggle = () => {
-  showWarehouse.value = false
-  currentType.value = 'ASVN'
+// ── XÓA CA (chỉ admin) ───────────────────────────────────────
+const deleteCustomer = async (id) => {
+  if (!canDelete.value) { showToast('Bạn không có quyền xóa ca!', 'error'); return }
+  const item = customers.value.find(c => c.id === id)
+  if (!item) return showToast('Ca không tồn tại!', 'error')
+  const msg = (showWarehouse.value && currentType.value === 'ASVN' && item.warehouse && item.warehouse !== currentWarehouse.value)
+    ? `Ca này thuộc kho ${item.warehouse}, bạn có chắc xóa?`
+    : 'Bạn có chắc chắn muốn xóa ca này?'
+  if (!confirm(msg)) return
+  const { error } = await supabase.from('customers').delete().eq('id', id)
+  if (error) showToast('Lỗi xóa: ' + error.message, 'error')
+  else { showToast('Đã xóa ca thành công!', 'success'); await loadData() }
+  if (showDetailModal.value) closeDetailModal()
+  if (showOutsideDetailModal.value) closeOutsideDetailModal()
 }
 
-const selectWarehouse = (wh) => {
-  currentWarehouse.value = wh
-  // ✅ Fix: reset search khi đổi kho
-  searchQuery.value = ''
-}
-
-const selectType = (type) => {
-  currentType.value = type
-  showTab.value = 'danglam'
-  outsideTab.value = 'danglam'
-  // ✅ Fix: reset search khi đổi loại ca
-  searchQuery.value = ''
-  historySearchQuery.value = ''
-}
-
-// === COMPUTED ===
-const filteredCustomers = computed(() => {
-  let filtered = customers.value
-
-  if (currentType.value === 'ASVN') filtered = filtered.filter(c => c.ticketId?.startsWith('ASVN'))
-  else if (currentType.value === 'CSVN') filtered = filtered.filter(c => c.ticketId?.startsWith('CSVN'))
-  else if (currentType.value === 'OUTSIDE') filtered = filtered.filter(c => c.ticketId?.startsWith('NGOAI'))
-
-  if (currentType.value === 'ASVN' && showWarehouse.value) {
-    const q = searchQuery.value.toLowerCase()
-    if (!q) filtered = filtered.filter(c => c.warehouse === currentWarehouse.value)
-  }
-
-  const q = searchQuery.value.toLowerCase()
-  return filtered.filter(c =>
-    c.name?.toLowerCase().includes(q) ||
-    c.phone?.includes(q) ||
-    c.ticketId?.toLowerCase().includes(q) ||
-    c.model?.toLowerCase().includes(q) ||
-    c.replacedPart?.toLowerCase().includes(q)
-  )
-})
-
-const dangLam = computed(() => filteredCustomers.value.filter(c => c.status === 0))
-const choLinhKien = computed(() => filteredCustomers.value.filter(c => c.status === 1))
-const hoanThanh = computed(() => {
-  const q = historySearchQuery.value.toLowerCase()
-  let items = filteredCustomers.value.filter(c => c.status === 2)
-  const filteredItems = q ? items.filter(c =>
-    c.name?.toLowerCase().includes(q) ||
-    c.phone?.includes(q) ||
-    c.ticketId?.toLowerCase().includes(q) ||
-    c.model?.toLowerCase().includes(q) ||
-    c.replacedPart?.toLowerCase().includes(q)
-  ) : items
-  const groups = {}
-  filteredItems.forEach(item => {
-    const d = item.doneDate || 'N/A'
-    if (!groups[d]) groups[d] = []
-    groups[d].push(item)
-  })
-  return groups
-})
-
-// ✅ Ca Ngoài phân tab riêng
-const outsideDangLam = computed(() => filteredCustomers.value.filter(c => c.status === 0))
-const outsideChoLinhKien = computed(() => filteredCustomers.value.filter(c => c.status === 1))
-const outsideHoanThanh = computed(() => filteredCustomers.value.filter(c => c.status === 2))
-
-const treCaList = computed(() => {
-  const now = new Date().getTime()
-  return filteredCustomers.value.filter(c => {
-    if (c.status !== 0) return false
-    if (!c.createdAt) return false
-    return now - new Date(c.createdAt).getTime() > 86400000
-  })
-})
-
-const getWarehouseLabel = (item) => {
-  if (!item.warehouse) return ''
-  return item.warehouse === 'TDP' ? 'Kho TDP' : 'Kho NV'
-}
-const getWarehouseBadgeClass = (wh) => wh === 'TDP' ? 'bg-primary' : 'bg-success'
-
-// === FORM CA NGOÀI ===
-const openOutsideForm = () => {
-  showOutsideForm.value = true
-  // ✅ Fix: reset đầy đủ kể cả name
-  outsideForm.value = { name: '', phone: '', brand: '', model: '', issue: '' }
-}
-const closeOutsideForm = () => showOutsideForm.value = false
-
-const saveOutsideCa = async () => {
-  if (!outsideForm.value.phone || !outsideForm.value.issue) {
-    showToast('Vui lòng nhập SĐT và tình trạng TV!', 'error')
-    return
-  }
-  const now = new Date()
-  const ticketId = `NGOAI-${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2,'0')}${now.getDate().toString().padStart(2,'0')}-${now.getHours().toString().padStart(2,'0')}${now.getMinutes().toString().padStart(2,'0')}${now.getSeconds().toString().padStart(2,'0')}`
-
-  const newCa = {
-    ticketId, name: outsideForm.value.name.trim() || 'Khách ngoài', phone: outsideForm.value.phone,
-    model: `${outsideForm.value.brand} ${outsideForm.value.model}`.trim() || 'Chưa rõ',
-    address: 'Ca ngoài - không có địa chỉ', issue: outsideForm.value.issue,
-    media: [], folderDrive: '', status: 0,
-    replacedPart: 'Chưa có linh kiện thay', doneDate: null,
-    createdAt: now.toISOString(), warehouse: 'TDP'
-  }
-
-  const { error } = await supabase.from('customers').insert([newCa])
-  if (error) { showToast('Lỗi lưu ca ngoài: ' + error.message, 'error'); return }
-
-  showToast('Đã nhận ca ngoài! Mã: ' + ticketId, 'success')
-  closeOutsideForm()
-  loadData()
-}
-
-const selectTreCa = (item) => {
-  searchQuery.value = item.ticketId
-  closeTreModal()
-}
-
-// === ON MOUNTED ===
-onMounted(() => {
-  loadData()
-  currentType.value = 'ASVN'
-  showWarehouse.value = true
-  currentWarehouse.value = 'TDP'
-
-  const channel = new BroadcastChannel('zalo_bridge')
-  channel.onmessage = (event) => { if (event.data) customHandleParse(event.data) }
-
-  window.addEventListener('focus', async () => {
-    try {
-      const text = await navigator.clipboard.readText()
-      if (text && (text.includes('ASVN') || text.includes('CSVN'))) customHandleParse(text)
-    } catch (err) {}
-  })
-})
-
-// === MEDIA ===
+// ── MEDIA ─────────────────────────────────────────────────────
 const formatDriveLink = (link) => {
   if (!link) return null
-  const driveIdMatch = link.match(/id=([^&]+)|d\/([^/]+)/)
-  if (driveIdMatch) {
-    const id = driveIdMatch[1] || driveIdMatch[2]
-    return `https://lh3.googleusercontent.com/d/${id}`
-  }
+  const m = link.match(/id=([^&]+)|d\/([^/]+)/)
+  if (m) return `https://lh3.googleusercontent.com/d/${m[1] || m[2]}`
   return link
 }
-
+const updateLocalMedia = (itemId, media) => {
+  if (showDetailModal.value && selectedCustomer.value?.id === itemId)
+    selectedCustomer.value = { ...selectedCustomer.value, media }
+  if (showOutsideDetailModal.value && selectedOutside.value?.id === itemId)
+    selectedOutside.value = { ...selectedOutside.value, media }
+}
 const onFileChange = async (e, item) => {
   const files = Array.from(e.target.files)
   const currentMedia = await loadMediaForItem(item.id)
@@ -389,281 +306,198 @@ const onFileChange = async (e, item) => {
     currentMedia.push({ type: file.type.startsWith('video') ? 'video' : 'image', data: base64, source: 'local' })
   }
   await supabase.from('customers').update({ media: currentMedia }).eq('id', item.id)
-  if (showDetailModal.value && selectedCustomer.value?.id === item.id) {
-    selectedCustomer.value = { ...selectedCustomer.value, media: currentMedia }
-  }
-  if (showOutsideDetailModal.value && selectedOutside.value?.id === item.id) {
-    selectedOutside.value = { ...selectedOutside.value, media: currentMedia }
-  }
+  updateLocalMedia(item.id, currentMedia)
 }
-
 const addSingleDrive = async (item) => {
   const inputEl = document.getElementById(`single-drive-${item.id}`)
-  if (!inputEl || !inputEl.value.trim()) return
+  if (!inputEl?.value.trim()) return
   const currentMedia = await loadMediaForItem(item.id)
   const link = inputEl.value.trim()
   currentMedia.push({ type: 'image', data: formatDriveLink(link), source: 'drive', original: link })
   await supabase.from('customers').update({ media: currentMedia }).eq('id', item.id)
   inputEl.value = ''
-  if (showDetailModal.value && selectedCustomer.value?.id === item.id) {
-    selectedCustomer.value = { ...selectedCustomer.value, media: currentMedia }
-  }
-  if (showOutsideDetailModal.value && selectedOutside.value?.id === item.id) {
-    selectedOutside.value = { ...selectedOutside.value, media: currentMedia }
-  }
+  updateLocalMedia(item.id, currentMedia)
 }
-
 const removeMedia = async (item, index) => {
   const currentMedia = await loadMediaForItem(item.id)
   currentMedia.splice(index, 1)
   await supabase.from('customers').update({ media: currentMedia }).eq('id', item.id)
-  if (showDetailModal.value && selectedCustomer.value?.id === item.id) {
-    selectedCustomer.value = { ...selectedCustomer.value, media: currentMedia }
-  }
-  if (showOutsideDetailModal.value && selectedOutside.value?.id === item.id) {
-    selectedOutside.value = { ...selectedOutside.value, media: currentMedia }
-  }
+  updateLocalMedia(item.id, currentMedia)
 }
 
-// === TRẠNG THÁI CA ===
-// ✅ Fix: thêm confirm trước khi chuyển trạng thái
-const hoanTatKiemTra = async (item, event) => {
-  if (!confirm(`Chuyển ca ${item.ticketId} sang "Chờ linh kiện"?`)) {
-    event.target.checked = false
-    return
-  }
-  await supabase.from('customers').update({ status: 1 }).eq('id', item.id)
-  await loadData()
-  showToast('Đã chuyển sang chờ linh kiện!', 'success')
-}
-
-const dongCa = async (item) => {
-  if (!confirm(`Chốt hoàn thành ca ${item.ticketId}?`)) return
-  const now = new Date()
-  const dateStr = `${now.getDate().toString().padStart(2,'0')}/${(now.getMonth()+1).toString().padStart(2,'0')}/${now.getFullYear()}`
-  await supabase.from('customers').update({ status: 2, doneDate: dateStr }).eq('id', item.id)
-  await loadData()
-  showToast('Đã chốt ca hoàn thành!', 'success')
-}
-
-const revertToDangLam = async (item) => {
-  await supabase.from('customers').update({ status: 0, doneDate: null }).eq('id', item.id)
-  await loadData()
-  if (showDetailModal.value) closeDetailModal()
-  showToast('Đã hoàn lại trạng thái đang làm!', 'warning')
-}
-
-const deleteCustomer = async (id) => {
-  const item = customers.value.find(c => c.id === id)
-  if (!item) return showToast('Ca không tồn tại!', 'error')
-
-  let confirmed = false
-  if (showWarehouse.value && currentType.value === 'ASVN' && item.warehouse && item.warehouse !== currentWarehouse.value) {
-    confirmed = confirm(`Ca này thuộc kho ${item.warehouse}, bạn có chắc xóa?`)
-  } else {
-    confirmed = confirm('Bạn có chắc chắn muốn xóa ca này?')
-  }
-  if (!confirmed) return
-
-  const { error } = await supabase.from('customers').delete().eq('id', id)
-  if (error) {
-    showToast('Lỗi xóa: ' + error.message, 'error')
-  } else {
-    showToast('Đã xóa ca thành công!', 'success')
-    await loadData()
-  }
-  if (showDetailModal.value) closeDetailModal()
-  if (showOutsideDetailModal.value) closeOutsideDetailModal()
-}
-
-const startEditFolder = (id, currentLink) => {
-  isEditingLink.value[id] = true
-  tempFolderLink.value[id] = currentLink || ''
-}
-
-const saveFolderLink = async (id) => {
+// ── DRIVE FOLDER ──────────────────────────────────────────────
+const startEditFolder = (id, currentLink) => { isEditingLink.value[id] = true; tempFolderLink.value[id] = currentLink || '' }
+const saveFolderLink  = async (id) => {
   const link = tempFolderLink.value[id]
   await supabase.from('customers').update({ folderDrive: link }).eq('id', id)
   isEditingLink.value[id] = false
-  if (showDetailModal.value && selectedCustomer.value?.id === id) {
-    selectedCustomer.value.folderDrive = link
-  }
-  if (showOutsideDetailModal.value && selectedOutside.value?.id === id) {
-    selectedOutside.value.folderDrive = link
-  }
-  await loadData()
-  showToast('Đã lưu link Drive!', 'success')
+  if (showDetailModal.value && selectedCustomer.value?.id === id) selectedCustomer.value.folderDrive = link
+  if (showOutsideDetailModal.value && selectedOutside.value?.id === id) selectedOutside.value.folderDrive = link
+  await loadData(); showToast('Đã lưu link Drive!', 'success')
 }
 
-const formatDate = (dateStr) => {
+// ── HELPERS ───────────────────────────────────────────────────
+const selectTreCa = (item) => { searchQuery.value = item.ticketId; closeTreModal() }
+const formatDate  = (dateStr) => {
   if (!dateStr) return 'Chưa có ngày tạo'
-  const date = new Date(dateStr)
-  if (isNaN(date.getTime())) return 'Ngày không hợp lệ'
-  return date.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  const d = new Date(dateStr)
+  return isNaN(d.getTime()) ? 'Ngày không hợp lệ'
+    : d.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-// === EXPORT EXCEL ===
+// ── EXPORT (chỉ admin) ────────────────────────────────────────
 const exportToExcel = (data, fileName) => {
+  if (!canExport.value) { showToast('Bạn không có quyền xuất Excel!', 'error'); return }
   if (!data.length) return showToast('Không có dữ liệu!', 'error')
-  const excelData = data.map(item => ({
-    'Kho': item.warehouse || 'N/A',
-    'Mã Ca': item.ticketId, 'Ngày Hoàn thành': item.doneDate,
-    'Khách Hàng': item.name, 'SĐT': item.phone,
-    'Model': item.model, 'Địa Chỉ': item.address,
+  const rows = data.map(item => ({
+    'Kho': item.warehouse || 'N/A', 'Mã Ca': item.ticketId,
+    'Ngày Hoàn thành': item.doneDate, 'Khách Hàng': item.name,
+    'SĐT': item.phone, 'Model': item.model, 'Địa Chỉ': item.address,
     'Lỗi': item.issue, 'Linh kiện thay': item.replacedPart
   }))
-  const ws = XLSX.utils.json_to_sheet(excelData)
+  const ws = XLSX.utils.json_to_sheet(rows)
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'Báo Cáo')
   XLSX.writeFile(wb, `${fileName}.xlsx`)
 }
+const exportHoanThanhByWarehouse = (wh) => exportToExcel(customers.value.filter(c => c.status === 2 && c.ticketId?.startsWith('ASVN') && c.warehouse === wh), `Bao-Cao-Hoan-Thanh-${wh}`)
+const exportAllHoanThanh = () => exportToExcel(customers.value.filter(c => c.status === 2 && c.ticketId?.startsWith('ASVN')), 'Bao-Cao-Hoan-Thanh-All')
 
-const exportHoanThanhByWarehouse = (wh) => {
-  const data = customers.value.filter(c => c.status === 2 && c.ticketId?.startsWith('ASVN') && c.warehouse === wh)
-  exportToExcel(data, `Bao-Cao-Hoan-Thanh-${wh}`)
-}
-
-const exportAllHoanThanh = () => {
-  const data = customers.value.filter(c => c.status === 2 && c.ticketId?.startsWith('ASVN'))
-  exportToExcel(data, 'Bao-Cao-Hoan-Thanh-All')
-}
-
-const getStatusClass = (status) => {
-  if (status === 0) return { border: 'border-primary', badge: 'bg-secondary', label: 'Đang làm', color: 'text-primary' }
-  if (status === 1) return { border: 'border-warning', badge: 'bg-warning text-dark', label: 'Chờ linh kiện', color: 'text-warning' }
-  if (status === 2) return { border: 'border-success', badge: 'bg-success text-white', label: 'Hoàn thành', color: 'text-success' }
-  return { border: '', badge: '', label: '', color: '' }
-}
-
-// === MODAL CHI TIẾT ASVN/CSVN - dùng chung cho mọi trạng thái ===
-const changeStatus = async (item, status) => {
-  if (!selectedCustomer.value) return
-  const now = new Date()
-  const dateStr = `${now.getDate().toString().padStart(2,'0')}/${(now.getMonth()+1).toString().padStart(2,'0')}/${now.getFullYear()}`
-  const updates = status === 2 ? { status, doneDate: dateStr } : { status, doneDate: null }
-  await supabase.from('customers').update(updates).eq('id', item.id)
-  selectedCustomer.value = { ...selectedCustomer.value, ...updates }
-  await loadData()
-  showToast('Đã cập nhật trạng thái!', 'success')
-}
-
-const editingPart2 = ref('')
-const savePartInModal = async () => {
-  if (!selectedCustomer.value) return
-  await supabase.from('customers')
-    .update({ replacedPart: editingPart2.value })
-    .eq('id', selectedCustomer.value.id)
-  selectedCustomer.value.replacedPart = editingPart2.value
-  await loadData()
-  showToast('Đã lưu linh kiện!', 'success')
-}
-
-const openDetailModalFull = async (customer) => {
-  selectedCustomer.value = { ...customer, media: [] }
-  editingPart2.value = customer.replacedPart || ''
-  showDetailModal.value = true
-  document.body.style.overflow = 'hidden'
-  const media = await loadMediaForItem(customer.id)
-  if (selectedCustomer.value) {
-    selectedCustomer.value = { ...selectedCustomer.value, media }
+// ── MOUNTED ───────────────────────────────────────────────────
+onMounted(async () => {
+  await initAuth()
+  if (isLoggedIn.value) {
+    await loadData()
+    if (isNhanVien.value && userWarehouse.value) currentWarehouse.value = userWarehouse.value
   }
-}
+  const channel = new BroadcastChannel('zalo_bridge')
+  channel.onmessage = (event) => { if (event.data) customHandleParse(event.data) }
+  window.addEventListener('focus', async () => {
+    try {
+      const text = await navigator.clipboard.readText()
+      if (text && (text.includes('ASVN') || text.includes('CSVN'))) customHandleParse(text)
+    } catch {}
+  })
+})
 </script>
 
 <template>
-  <div class="page-wrap">
 
-    <!-- ✅ TOAST NOTIFICATIONS -->
+  <!-- Đang tải auth -->
+  <div v-if="isAuthLoading" class="auth-loading">
+    <div class="spinner-border text-primary" style="width:3rem;height:3rem;"></div>
+    <p class="mt-3 text-muted fw-bold">Đang tải...</p>
+  </div>
+
+  <!-- Chưa login -->
+  <LoginPage v-else-if="!isLoggedIn" />
+
+  <!-- App chính -->
+  <div v-else class="page-wrap">
+
+    <!-- TOAST -->
     <div class="toast-container">
-      <div v-for="toast in toasts" :key="toast.id"
-        :class="['toast-item', `toast-${toast.type}`]">
-        {{ toast.message }}
+      <div v-for="t in toasts" :key="t.id" :class="['toast-item', `toast-${t.type}`]">{{ t.message }}</div>
+    </div>
+
+    <!-- TOP BAR -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <span class="topbar-logo">📺</span>
+        <span class="topbar-appname">TV Repair</span>
+        <span :class="['role-chip', isAdmin ? 'role-admin' : 'role-nv']">
+          {{ isAdmin ? '👑 Admin' : '👷 Nhân viên' }}
+        </span>
       </div>
+      <div class="topbar-right">
+        <span class="topbar-user">{{ userName }}</span>
+        <button v-if="isAdmin"
+          @click="showAdminPanel = !showAdminPanel"
+          :class="['btn-topbar', showAdminPanel ? 'btn-topbar--active' : '']">
+          👥 Quản lý TK
+        </button>
+        <button @click="logout" class="btn-topbar btn-topbar--logout">🚪 Thoát</button>
+      </div>
+    </div>
+
+    <!-- ADMIN PANEL -->
+    <div v-if="showAdminPanel && isAdmin" class="admin-panel-wrap">
+      <AdminPanel />
     </div>
 
     <div class="layout">
       <div class="control-card">
+
         <!-- Toggle loại ca -->
         <div v-if="!showWarehouse || currentType !== 'ASVN'" class="toggle-row">
-          <button @click="selectType('ASVN'); showWarehouse = true; currentWarehouse = 'TDP'"
-            :class="['btn fw-bold flex-grow-1', currentType === 'ASVN' ? 'btn-primary text-white' : 'btn-outline-primary']">
-            📋 ASVN
-          </button>
+          <button @click="selectType('ASVN'); showWarehouse = true"
+            :class="['btn fw-bold flex-grow-1', currentType==='ASVN' ? 'btn-primary text-white' : 'btn-outline-primary']">📋 ASVN</button>
           <button @click="selectType('CSVN'); showWarehouse = false"
-            :class="['btn fw-bold flex-grow-1', currentType === 'CSVN' ? 'btn-primary text-white' : 'btn-outline-primary']">
-            📋 CSVN
-          </button>
+            :class="['btn fw-bold flex-grow-1', currentType==='CSVN' ? 'btn-primary text-white' : 'btn-outline-primary']">📋 CSVN</button>
           <button @click="selectType('OUTSIDE'); showWarehouse = false"
-            :class="['btn fw-bold flex-grow-1', currentType === 'OUTSIDE' ? 'btn-primary text-white' : 'btn-outline-primary']">
-            📝 Ca Ngoài
-          </button>
+            :class="['btn fw-bold flex-grow-1', currentType==='OUTSIDE' ? 'btn-primary text-white' : 'btn-outline-primary']">📝 Ca Ngoài</button>
         </div>
 
         <!-- Warehouse toggle -->
         <div v-if="showWarehouse && currentType === 'ASVN'" class="warehouse-toggle-row">
           <div class="gear-container">
-            <button @click="backToTypeToggle" class="btn-gear" title="Quay về phân loại loại ca">⚙️</button>
+            <button @click="backToTypeToggle" class="btn-gear" title="Quay về phân loại">⚙️</button>
           </div>
           <div class="warehouse-buttons">
             <button @click="selectWarehouse('TDP'); showTab = 'danglam'"
-              :class="['btn fw-bold flex-grow-1', currentWarehouse === 'TDP' ? 'btn-primary text-white' : 'btn-outline-primary']">
-              🏭 TDP
-            </button>
+              :class="['btn fw-bold flex-grow-1', currentWarehouse==='TDP' ? 'btn-primary text-white' : 'btn-outline-primary']">🏭 TDP</button>
             <button @click="selectWarehouse('NV'); showTab = 'danglam'"
-              :class="['btn fw-bold flex-grow-1', currentWarehouse === 'NV' ? 'btn-success text-white' : 'btn-outline-success']">
-              🏭 NV
-            </button>
+              :class="['btn fw-bold flex-grow-1', currentWarehouse==='NV' ? 'btn-success text-white' : 'btn-outline-success']">🏭 NV</button>
           </div>
         </div>
 
-        <!-- 3 tab trạng thái ASVN/CSVN -->
+        <!-- Tabs ASVN/CSVN -->
         <div v-if="currentType !== 'OUTSIDE'" class="status-toggle-row">
-          <button @click="showTab = 'danglam'" :class="['btn fw-bold flex-grow-1', showTab === 'danglam' ? 'btn-primary text-white' : 'btn-outline-primary']">
+          <button @click="showTab = 'danglam'" :class="['btn fw-bold flex-grow-1', showTab==='danglam' ? 'btn-primary text-white' : 'btn-outline-primary']">
             ⚡ <span class="tab-label">ĐANG LÀM</span> ({{ dangLam.length }})
           </button>
-          <button @click="showTab = 'cholinkien'" :class="['btn fw-bold flex-grow-1', showTab === 'cholinkien' ? 'btn-warning text-white' : 'btn-outline-warning']">
+          <button @click="showTab = 'cholinkien'" :class="['btn fw-bold flex-grow-1', showTab==='cholinkien' ? 'btn-warning text-white' : 'btn-outline-warning']">
             ⏳ <span class="tab-label">CHỜ LK</span> ({{ choLinhKien.length }})
           </button>
-          <button @click="showTab = 'hoanthanh'" :class="['btn fw-bold flex-grow-1', showTab === 'hoanthanh' ? 'btn-success text-white' : 'btn-outline-success']">
+          <button @click="showTab = 'hoanthanh'" :class="['btn fw-bold flex-grow-1', showTab==='hoanthanh' ? 'btn-success text-white' : 'btn-outline-success']">
             ✅ <span class="tab-label">XONG</span> ({{ Object.values(hoanThanh).flat().length }})
           </button>
         </div>
 
-        <!-- ✅ 3 tab trạng thái CA NGOÀI -->
+        <!-- Tabs Ca Ngoài -->
         <div v-if="currentType === 'OUTSIDE'" class="status-toggle-row">
-          <button @click="outsideTab = 'danglam'" :class="['btn fw-bold flex-grow-1', outsideTab === 'danglam' ? 'btn-primary text-white' : 'btn-outline-primary']">
+          <button @click="outsideTab = 'danglam'" :class="['btn fw-bold flex-grow-1', outsideTab==='danglam' ? 'btn-primary text-white' : 'btn-outline-primary']">
             ⚡ <span class="tab-label">ĐANG LÀM</span> ({{ outsideDangLam.length }})
           </button>
-          <button @click="outsideTab = 'cholinkien'" :class="['btn fw-bold flex-grow-1', outsideTab === 'cholinkien' ? 'btn-warning text-white' : 'btn-outline-warning']">
+          <button @click="outsideTab = 'cholinkien'" :class="['btn fw-bold flex-grow-1', outsideTab==='cholinkien' ? 'btn-warning text-white' : 'btn-outline-warning']">
             ⏳ <span class="tab-label">CHỜ LK</span> ({{ outsideChoLinhKien.length }})
           </button>
-          <button @click="outsideTab = 'hoanthanh'" :class="['btn fw-bold flex-grow-1', outsideTab === 'hoanthanh' ? 'btn-success text-white' : 'btn-outline-success']">
+          <button @click="outsideTab = 'hoanthanh'" :class="['btn fw-bold flex-grow-1', outsideTab==='hoanthanh' ? 'btn-success text-white' : 'btn-outline-success']">
             ✅ <span class="tab-label">XONG</span> ({{ outsideHoanThanh.length }})
           </button>
         </div>
 
-        <!-- Control body ASVN/CSVN -->
+        <!-- Control body ASVN / CSVN -->
         <div v-if="currentType === 'ASVN' || currentType === 'CSVN'">
           <div v-if="showTab === 'danglam'" class="control-body">
             <div class="d-flex justify-content-between align-items-start mb-3">
               <textarea v-model="rawInput" rows="2" class="form-control flex-grow-1 me-3"
                 placeholder="Dán nội dung hoặc đợi tin nhắn Zalo..."
                 @keyup.enter="customHandleParse(rawInput)"></textarea>
-              <div class="position-relative" style="min-width: 50px;">
+              <div class="position-relative" style="min-width:50px;">
                 <button class="btn btn-outline-warning position-relative rounded-circle p-2 shadow"
-                  style="width: 50px; height: 50px; display: flex; align-items: center; justify-content: center;"
-                  @click="openTreModal" title="Thông báo ca trễ">
-                  <span style="font-size: 1.8rem;">🔔</span>
+                  style="width:50px;height:50px;display:flex;align-items:center;justify-content:center;"
+                  @click="openTreModal">
+                  <span style="font-size:1.8rem;">🔔</span>
                   <span v-if="treCaList.length > 0"
                     class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger border border-white"
-                    style="font-size: 0.75rem; min-width: 20px; height: 20px; line-height: 1.2; padding: 0;">
+                    style="font-size:0.75rem;min-width:20px;height:20px;line-height:1.2;padding:0;">
                     {{ treCaList.length }}
                   </span>
                 </button>
               </div>
             </div>
             <div class="control-actions">
-              <!-- ✅ Fix: loading state khi nhập ca -->
               <button @click="customHandleParse(rawInput)" class="btn btn-primary fw-bold" :disabled="isParsing">
                 <span v-if="isParsing" class="spinner-border spinner-border-sm me-1"></span>
                 {{ isParsing ? 'ĐANG XỬ LÝ...' : 'NHẬP KHÁCH' }}
@@ -677,16 +511,14 @@ const openDetailModalFull = async (customer) => {
             <div class="d-flex flex-column gap-3">
               <div class="d-flex gap-3 flex-wrap align-items-end">
                 <input v-model="searchTicketId" type="text" class="form-control flex-grow-1"
-                  placeholder="Nhập mã ASVN cần cập nhật/sửa linh kiện..." @keyup.enter="loadPartForEdit">
+                  placeholder="Nhập mã ASVN cần cập nhật..." @keyup.enter="loadPartForEdit">
                 <button @click="loadPartForEdit" class="btn btn-outline-primary">Tìm</button>
               </div>
               <div class="d-flex gap-3 flex-wrap align-items-end">
                 <input v-model="newReplacedPart" type="text" class="form-control flex-grow-1"
-                  :placeholder="editingPart ? 'Sửa linh kiện hiện tại...' : 'Loại linh kiện thay...'"
+                  :placeholder="editingPart ? 'Sửa linh kiện...' : 'Loại linh kiện thay...'"
                   @click="openPartModal">
-                <button @click="saveLinhKien" class="btn btn-success px-4 fw-bold">
-                  {{ editingPart ? 'Sửa' : 'Lưu' }}
-                </button>
+                <button @click="saveLinhKien" class="btn btn-success px-4 fw-bold">{{ editingPart ? 'Sửa' : 'Lưu' }}</button>
                 <button v-if="editingPart" @click="deleteLinhKien" class="btn btn-danger px-4 fw-bold">Xóa</button>
               </div>
               <input v-model="searchQuery" type="text" class="form-control" placeholder="Tìm theo tên, sđt, mã ca, model, linh kiện...">
@@ -696,24 +528,27 @@ const openDetailModalFull = async (customer) => {
           <div v-else-if="showTab === 'hoanthanh'" class="control-body">
             <div class="d-flex gap-2 flex-wrap">
               <input type="text" v-model="historySearchQuery" class="form-control flex-grow-1 mb-2"
-                placeholder="🔍 Tìm trong lịch sử hoàn thành...">
-              <div v-if="showWarehouse" class="d-flex gap-1 w-100">
-                <button @click="exportHoanThanhByWarehouse('TDP')" class="btn btn-outline-primary fw-bold flex-grow-1">📊 TDP</button>
-                <button @click="exportHoanThanhByWarehouse('NV')" class="btn btn-outline-success fw-bold flex-grow-1">📊 NV</button>
-              </div>
-              <button v-else @click="exportAllHoanThanh" class="btn btn-outline-dark fw-bold">📊 XUẤT EXCEL</button>
+                placeholder="🔍 Tìm trong lịch sử...">
+              <!-- Xuất Excel: chỉ admin -->
+              <template v-if="isAdmin">
+                <div v-if="showWarehouse" class="d-flex gap-1 w-100">
+                  <button @click="exportHoanThanhByWarehouse('TDP')" class="btn btn-outline-primary fw-bold flex-grow-1">📊 TDP</button>
+                  <button @click="exportHoanThanhByWarehouse('NV')"  class="btn btn-outline-success fw-bold flex-grow-1">📊 NV</button>
+                </div>
+                <button v-else @click="exportAllHoanThanh" class="btn btn-outline-dark fw-bold">📊 XUẤT EXCEL</button>
+              </template>
             </div>
           </div>
         </div>
 
-        <!-- Control body CA NGOÀI -->
+        <!-- Control body Ca Ngoài -->
         <div v-else-if="currentType === 'OUTSIDE'" class="control-body">
           <button @click="openOutsideForm" class="btn btn-success fw-bold w-100 py-3 mb-2">+ NHẬN CA NGOÀI MỚI</button>
           <input type="text" v-model="searchQuery" class="form-control mt-1" placeholder="🔍 Tìm kiếm nhanh...">
         </div>
       </div>
 
-      <!-- CASES SECTION -->
+      <!-- CASES -->
       <section class="cases-section">
         <div class="section-header">
           <h2 class="section-title">
@@ -723,12 +558,12 @@ const openDetailModalFull = async (customer) => {
           </h2>
         </div>
 
-        <!-- ASVN / CSVN -->
+        <!-- ── ASVN / CSVN ── -->
         <div v-if="currentType !== 'OUTSIDE'">
 
-          <!-- TAB ĐANG LÀM -->
+          <!-- Đang làm -->
           <div v-if="showTab === 'danglam'">
-            <div v-if="dangLam.length > 0">
+            <div v-if="dangLam.length">
               <h5 class="mb-3">Đang làm ({{ dangLam.length }})</h5>
               <div class="case-strip">
                 <div v-for="item in dangLam" :key="item.id" class="case-card"
@@ -737,13 +572,12 @@ const openDetailModalFull = async (customer) => {
                     <div class="card-body border-start border-5 border-primary d-flex flex-column">
                       <div class="d-flex justify-content-between align-items-start mb-2">
                         <div class="d-flex align-items-center gap-2 flex-wrap">
-                          <!-- ✅ Fix: stopPropagation để click checkbox không mở modal -->
-                          <input type="checkbox" @click.stop @change="hoanTatKiemTra(item, $event)" style="width: 20px; height: 20px;">
+                          <input type="checkbox" @click.stop @change="hoanTatKiemTra(item, $event)" style="width:20px;height:20px;">
                           <span class="fw-bold text-primary">{{ item.ticketId }}</span>
                           <span v-if="item.warehouse" class="badge" :class="getWarehouseBadgeClass(item.warehouse)">{{ getWarehouseLabel(item) }}</span>
                           <span class="badge bg-secondary">Chờ xử lý</span>
                         </div>
-                        <button @click.stop="deleteCustomer(item.id)" class="btn btn-sm text-danger opacity-50">🗑️</button>
+                        <button v-if="isAdmin" @click.stop="deleteCustomer(item.id)" class="btn btn-sm text-danger opacity-50">🗑️</button>
                       </div>
                       <div class="info-content">
                         <div class="fw-bold text-dark">👤 {{ item.name }}</div>
@@ -761,13 +595,13 @@ const openDetailModalFull = async (customer) => {
             <div v-else class="text-center text-muted py-5">Chưa có ca đang làm</div>
           </div>
 
-          <!-- TAB CHỜ LINH KIỆN -->
+          <!-- Chờ linh kiện -->
           <div v-if="showTab === 'cholinkien'">
-            <div v-if="choLinhKien.length > 0">
+            <div v-if="choLinhKien.length">
               <h5 class="mb-3">Chờ linh kiện ({{ choLinhKien.length }})</h5>
               <div class="case-strip">
                 <div v-for="item in choLinhKien" :key="item.id" class="case-card"
-                  @click="openDetailModalFull(item)" style="cursor: pointer;">
+                  @click="openDetailModalFull(item)" style="cursor:pointer;">
                   <div class="card border-0 shadow-sm h-100">
                     <div class="card-body border-start border-5 border-warning d-flex flex-column">
                       <div class="d-flex justify-content-between align-items-start mb-2 flex-wrap gap-2">
@@ -777,7 +611,7 @@ const openDetailModalFull = async (customer) => {
                           <span v-if="item.warehouse" class="badge" :class="getWarehouseBadgeClass(item.warehouse)">{{ getWarehouseLabel(item) }}</span>
                           <span class="badge bg-warning text-dark">Chờ linh kiện</span>
                         </div>
-                        <button @click.stop="deleteCustomer(item.id)" class="btn btn-sm text-danger opacity-50">🗑️</button>
+                        <button v-if="isAdmin" @click.stop="deleteCustomer(item.id)" class="btn btn-sm text-danger opacity-50">🗑️</button>
                       </div>
                       <div class="info-content">
                         <div class="fw-bold text-dark">👤 {{ item.name }}</div>
@@ -795,15 +629,15 @@ const openDetailModalFull = async (customer) => {
             <div v-else class="text-center text-muted py-5">Chưa có ca chờ linh kiện</div>
           </div>
 
-          <!-- TAB HOÀN THÀNH -->
+          <!-- Hoàn thành -->
           <div v-if="showTab === 'hoanthanh'">
-            <div v-if="Object.keys(hoanThanh).length > 0">
+            <div v-if="Object.keys(hoanThanh).length">
               <h5 class="mb-3">Hoàn thành</h5>
               <div v-for="(group, date) in hoanThanh" :key="date" class="mb-4">
                 <div class="mb-3"><span class="date-pill">📅 {{ date }} ({{ group.length }} ca)</span></div>
                 <div class="case-strip">
                   <div v-for="item in group" :key="item.id" class="case-card"
-                    @click="openDetailModalFull(item)" style="cursor: pointer;">
+                    @click="openDetailModalFull(item)" style="cursor:pointer;">
                     <div class="card border-0 shadow-sm">
                       <div class="card-body border-start border-5 border-success">
                         <div class="d-flex justify-content-between mb-2 flex-wrap gap-2">
@@ -822,20 +656,20 @@ const openDetailModalFull = async (customer) => {
           </div>
         </div>
 
-        <!-- ✅ CA NGOÀI - có 3 tab -->
+        <!-- ── CA NGOÀI ── -->
         <div v-else-if="currentType === 'OUTSIDE'">
-          <!-- Tab Đang làm -->
+          <!-- Đang làm -->
           <div v-if="outsideTab === 'danglam'">
-            <div v-if="outsideDangLam.length > 0">
+            <div v-if="outsideDangLam.length">
               <h5 class="mb-3">Đang làm ({{ outsideDangLam.length }})</h5>
               <div class="case-strip">
                 <div v-for="item in outsideDangLam" :key="item.id" class="case-card"
-                  @click="openOutsideDetailModal(item)" style="cursor: pointer;">
+                  @click="openOutsideDetailModal(item)" style="cursor:pointer;">
                   <div class="card border-0 shadow-sm h-100">
                     <div class="card-body border-start border-5 border-primary">
                       <div class="d-flex justify-content-between align-items-start mb-2">
                         <span class="fw-bold text-primary">{{ item.ticketId }}</span>
-                        <button @click.stop="deleteCustomer(item.id)" class="btn btn-sm text-danger opacity-50">🗑️</button>
+                        <button v-if="isAdmin" @click.stop="deleteCustomer(item.id)" class="btn btn-sm text-danger opacity-50">🗑️</button>
                       </div>
                       <div class="fw-bold text-dark">👤 {{ item.name }}</div>
                       <div class="fw-bold text-secondary mb-1">📞 {{ item.phone }}</div>
@@ -849,19 +683,18 @@ const openDetailModalFull = async (customer) => {
             </div>
             <div v-else class="text-center text-muted py-5">Chưa có ca ngoài đang làm</div>
           </div>
-
-          <!-- Tab Chờ linh kiện -->
+          <!-- Chờ LK -->
           <div v-if="outsideTab === 'cholinkien'">
-            <div v-if="outsideChoLinhKien.length > 0">
+            <div v-if="outsideChoLinhKien.length">
               <h5 class="mb-3">Chờ linh kiện ({{ outsideChoLinhKien.length }})</h5>
               <div class="case-strip">
                 <div v-for="item in outsideChoLinhKien" :key="item.id" class="case-card"
-                  @click="openOutsideDetailModal(item)" style="cursor: pointer;">
+                  @click="openOutsideDetailModal(item)" style="cursor:pointer;">
                   <div class="card border-0 shadow-sm h-100">
                     <div class="card-body border-start border-5 border-warning">
                       <div class="d-flex justify-content-between align-items-start mb-2">
                         <span class="fw-bold text-primary">{{ item.ticketId }}</span>
-                        <button @click.stop="deleteCustomer(item.id)" class="btn btn-sm text-danger opacity-50">🗑️</button>
+                        <button v-if="isAdmin" @click.stop="deleteCustomer(item.id)" class="btn btn-sm text-danger opacity-50">🗑️</button>
                       </div>
                       <div class="fw-bold text-dark">👤 {{ item.name }}</div>
                       <div class="fw-bold text-secondary mb-1">📞 {{ item.phone }}</div>
@@ -875,19 +708,18 @@ const openDetailModalFull = async (customer) => {
             </div>
             <div v-else class="text-center text-muted py-5">Chưa có ca ngoài chờ linh kiện</div>
           </div>
-
-          <!-- Tab Hoàn thành -->
+          <!-- Hoàn thành -->
           <div v-if="outsideTab === 'hoanthanh'">
-            <div v-if="outsideHoanThanh.length > 0">
+            <div v-if="outsideHoanThanh.length">
               <h5 class="mb-3">Hoàn thành ({{ outsideHoanThanh.length }})</h5>
               <div class="case-strip">
                 <div v-for="item in outsideHoanThanh" :key="item.id" class="case-card"
-                  @click="openOutsideDetailModal(item)" style="cursor: pointer;">
+                  @click="openOutsideDetailModal(item)" style="cursor:pointer;">
                   <div class="card border-0 shadow-sm h-100">
                     <div class="card-body border-start border-5 border-success">
                       <div class="d-flex justify-content-between align-items-start mb-2">
                         <span class="fw-bold text-success">{{ item.ticketId }}</span>
-                        <button @click.stop="deleteCustomer(item.id)" class="btn btn-sm text-danger opacity-50">🗑️</button>
+                        <button v-if="isAdmin" @click.stop="deleteCustomer(item.id)" class="btn btn-sm text-danger opacity-50">🗑️</button>
                       </div>
                       <div class="fw-bold text-dark">👤 {{ item.name }}</div>
                       <div class="fw-bold text-secondary mb-1">📞 {{ item.phone }}</div>
@@ -904,55 +736,102 @@ const openDetailModalFull = async (customer) => {
         </div>
       </section>
 
-      <!-- MODAL NHẬN CA NGOÀI MỚI -->
-      <div v-if="showOutsideForm" class="modal fade show" tabindex="-1" style="display: block; background: rgba(0,0,0,0.5);">
-        <div class="modal-dialog modal-dialog-centered">
+      <!-- ══ MODAL CHI TIẾT ASVN/CSVN ══ -->
+      <div v-if="showDetailModal && selectedCustomer" class="modal fade show" tabindex="-1" style="display:block;background:rgba(0,0,0,0.7);">
+        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
           <div class="modal-content">
-            <div class="modal-header bg-success text-white">
-              <h5 class="modal-title">Nhận Ca Ngoài Mới</h5>
-              <button type="button" class="btn-close btn-close-white" @click="closeOutsideForm"></button>
+            <div class="modal-header text-white"
+              :style="{backgroundColor: selectedCustomer.status===0?'#3b82f6':selectedCustomer.status===1?'#f59e0b':'#198754'}">
+              <h5 class="modal-title">
+                {{ selectedCustomer.ticketId }}
+                <span class="badge ms-2 bg-white fw-bold"
+                  :style="{color: selectedCustomer.status===0?'#3b82f6':selectedCustomer.status===1?'#f59e0b':'#198754'}">
+                  {{ selectedCustomer.status===0?'Đang làm':selectedCustomer.status===1?'Chờ linh kiện':'Hoàn thành' }}
+                </span>
+              </h5>
+              <button type="button" class="btn-close btn-close-white" @click="closeDetailModal"></button>
             </div>
             <div class="modal-body">
-              <div class="mb-3">
-                <label class="form-label fw-bold">Tên khách hàng</label>
-                <input v-model="outsideForm.name" type="text" class="form-control" placeholder="VD: Anh Hòa, Chị Mai...">
-              </div>
-              <div class="mb-3">
-                <label class="form-label fw-bold">SĐT khách hàng <span class="text-danger">*</span></label>
-                <input v-model="outsideForm.phone" type="tel" class="form-control" placeholder="VD: 0905123456">
-              </div>
-              <div class="mb-3">
-                <label class="form-label fw-bold">Hãng TV</label>
-                <input v-model="outsideForm.brand" type="text" class="form-control" placeholder="VD: Xiaomi, Samsung, LG">
-              </div>
-              <div class="mb-3">
-                <label class="form-label fw-bold">Model TV</label>
-                <input v-model="outsideForm.model" type="text" class="form-control" placeholder="VD: TV A2 2025">
-              </div>
-              <div class="mb-3">
-                <label class="form-label fw-bold">Tình trạng / Lỗi TV <span class="text-danger">*</span></label>
-                <textarea v-model="outsideForm.issue" class="form-control" rows="4" placeholder="VD: Màn hình đen..."></textarea>
+              <div class="row">
+                <div class="col-md-5">
+                  <h5 class="mb-1 fw-bold">{{ selectedCustomer.name }}</h5>
+                  <p class="text-secondary fw-bold mb-2">📞 {{ selectedCustomer.phone }}</p>
+                  <p v-if="selectedCustomer.warehouse"><strong>Kho:</strong> {{ selectedCustomer.warehouse }}</p>
+                  <p v-if="selectedCustomer.serial"><strong>Serial:</strong> {{ selectedCustomer.serial }}</p>
+                  <p v-if="selectedCustomer.branch"><strong>Chi nhánh:</strong> {{ selectedCustomer.branch }}</p>
+                  <p><strong>Model:</strong> {{ selectedCustomer.model }}</p>
+                  <p><strong>Địa chỉ:</strong> {{ selectedCustomer.address }}</p>
+                  <p><strong>Lỗi:</strong> <span class="text-danger fw-bold">{{ selectedCustomer.issue }}</span></p>
+                  <p><strong>Ngày tạo:</strong> {{ formatDate(selectedCustomer.createdAt) }}</p>
+                  <p v-if="selectedCustomer.doneDate"><strong>Ngày hoàn thành:</strong> {{ selectedCustomer.doneDate }}</p>
+                  <div class="mt-3 mb-3">
+                    <label class="form-label fw-bold">Chuyển trạng thái:</label>
+                    <div class="d-flex gap-2 flex-wrap">
+                      <button @click="changeStatus(selectedCustomer, 0)" :class="['btn fw-bold flex-grow-1', selectedCustomer.status===0?'btn-primary':'btn-outline-primary']">⚡ Đang làm</button>
+                      <button @click="changeStatus(selectedCustomer, 1)" :class="['btn fw-bold flex-grow-1', selectedCustomer.status===1?'btn-warning':'btn-outline-warning']">⏳ Chờ LK</button>
+                      <button @click="changeStatus(selectedCustomer, 2)" :class="['btn fw-bold flex-grow-1', selectedCustomer.status===2?'btn-success':'btn-outline-success']">✅ Xong</button>
+                    </div>
+                  </div>
+                  <div class="mt-3">
+                    <label class="form-label fw-bold">Linh kiện thay:</label>
+                    <div class="input-group mb-1">
+                      <input v-model="editingPart2" type="text" class="form-control" placeholder="Nhập linh kiện..." @keyup.enter="savePartInModal">
+                      <button @click="savePartInModal" class="btn btn-success fw-bold">Lưu</button>
+                    </div>
+                    <small class="text-muted">Hiện tại: {{ selectedCustomer.replacedPart || 'Chưa có' }}</small>
+                  </div>
+                  <div class="mt-3">
+                    <label class="form-label fw-bold">Link Drive:</label>
+                    <div v-if="!selectedCustomer.folderDrive || isEditingLink[selectedCustomer.id]" class="input-group input-group-sm">
+                      <input v-model="tempFolderLink[selectedCustomer.id]" class="form-control" placeholder="Dán link Google Drive..." @keyup.enter="saveFolderLink(selectedCustomer.id)">
+                      <button @click="saveFolderLink(selectedCustomer.id)" class="btn btn-primary fw-bold">Lưu</button>
+                    </div>
+                    <div v-else class="d-flex gap-2">
+                      <a :href="selectedCustomer.folderDrive" target="_blank" class="btn btn-sm btn-info text-white flex-grow-1 fw-bold">📂 MỞ DRIVE</a>
+                      <button @click="startEditFolder(selectedCustomer.id, selectedCustomer.folderDrive)" class="btn btn-sm btn-light border fw-bold">✏️</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-7">
+                  <h6 class="mb-3">Ảnh &amp; Video</h6>
+                  <div v-if="!selectedCustomer.media?.length" class="text-muted small mb-3">⏳ Đang tải ảnh...</div>
+                  <div class="media-grid">
+                    <div v-for="(m, idx) in selectedCustomer.media || []" :key="idx" class="media-item position-relative">
+                      <img v-if="m.type==='image'" :src="m.data" @click="openMediaModal(m)" alt="Ảnh" style="cursor:pointer;">
+                      <video v-else :src="m.data" controls preload="metadata"></video>
+                      <span @click.stop="removeMedia(selectedCustomer, idx)" class="media-del">×</span>
+                    </div>
+                    <label class="media-add">
+                      <span>+</span>
+                      <input type="file" hidden multiple accept="image/*,video/*" @change="onFileChange($event, selectedCustomer)">
+                    </label>
+                  </div>
+                  <div class="input-group input-group-sm mt-2">
+                    <input :id="'single-drive-'+selectedCustomer.id" class="form-control" placeholder="Link ảnh lẻ..." @keyup.enter="addSingleDrive(selectedCustomer)">
+                    <button @click="addSingleDrive(selectedCustomer)" class="btn btn-outline-primary">Thêm</button>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="modal-footer">
-              <button type="button" class="btn btn-secondary" @click="closeOutsideForm">Đóng</button>
-              <button type="button" class="btn btn-success" @click="saveOutsideCa">Lưu Ca Ngoài</button>
+              <button v-if="isAdmin" @click="deleteCustomer(selectedCustomer.id)" class="btn btn-danger">🗑️ Xóa ca</button>
+              <button type="button" class="btn btn-secondary" @click="closeDetailModal">Đóng</button>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- MODAL CHI TIẾT CA NGOÀI -->
-      <div v-if="showOutsideDetailModal && selectedOutside" class="modal fade show" tabindex="-1" style="display: block; background: rgba(0,0,0,0.7);">
+      <!-- ══ MODAL CHI TIẾT CA NGOÀI ══ -->
+      <div v-if="showOutsideDetailModal && selectedOutside" class="modal fade show" tabindex="-1" style="display:block;background:rgba(0,0,0,0.7);">
         <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
           <div class="modal-content">
             <div class="modal-header text-white"
-              :style="{ backgroundColor: selectedOutside.status === 0 ? '#3b82f6' : selectedOutside.status === 1 ? '#f59e0b' : '#198754' }">
+              :style="{backgroundColor: selectedOutside.status===0?'#3b82f6':selectedOutside.status===1?'#f59e0b':'#198754'}">
               <h5 class="modal-title">
                 {{ selectedOutside.ticketId }}
                 <span class="badge ms-2 bg-white fw-bold"
-                  :style="{ color: selectedOutside.status === 0 ? '#3b82f6' : selectedOutside.status === 1 ? '#f59e0b' : '#198754' }">
-                  {{ selectedOutside.status === 0 ? 'Đang làm' : selectedOutside.status === 1 ? 'Chờ linh kiện' : 'Hoàn thành' }}
+                  :style="{color: selectedOutside.status===0?'#3b82f6':selectedOutside.status===1?'#f59e0b':'#198754'}">
+                  {{ selectedOutside.status===0?'Đang làm':selectedOutside.status===1?'Chờ linh kiện':'Hoàn thành' }}
                 </span>
               </h5>
               <button type="button" class="btn-close btn-close-white" @click="closeOutsideDetailModal"></button>
@@ -969,9 +848,9 @@ const openDetailModalFull = async (customer) => {
                   <div class="mt-3 mb-3">
                     <label class="form-label fw-bold">Chuyển trạng thái:</label>
                     <div class="d-flex gap-2 flex-wrap">
-                      <button @click="changeOutsideStatus(0)" :class="['btn fw-bold flex-grow-1', selectedOutside.status === 0 ? 'btn-primary' : 'btn-outline-primary']">⚡ Đang làm</button>
-                      <button @click="changeOutsideStatus(1)" :class="['btn fw-bold flex-grow-1', selectedOutside.status === 1 ? 'btn-warning' : 'btn-outline-warning']">⏳ Chờ LK</button>
-                      <button @click="changeOutsideStatus(2)" :class="['btn fw-bold flex-grow-1', selectedOutside.status === 2 ? 'btn-success' : 'btn-outline-success']">✅ Xong</button>
+                      <button @click="changeOutsideStatus(0)" :class="['btn fw-bold flex-grow-1', selectedOutside.status===0?'btn-primary':'btn-outline-primary']">⚡ Đang làm</button>
+                      <button @click="changeOutsideStatus(1)" :class="['btn fw-bold flex-grow-1', selectedOutside.status===1?'btn-warning':'btn-outline-warning']">⏳ Chờ LK</button>
+                      <button @click="changeOutsideStatus(2)" :class="['btn fw-bold flex-grow-1', selectedOutside.status===2?'btn-success':'btn-outline-success']">✅ Xong</button>
                     </div>
                   </div>
                   <div class="mt-3">
@@ -995,11 +874,11 @@ const openDetailModalFull = async (customer) => {
                   </div>
                 </div>
                 <div class="col-md-7">
-                  <h6 class="mb-3">Ảnh & Video</h6>
-                  <div v-if="!selectedOutside.media || selectedOutside.media.length === 0" class="text-muted small mb-3">⏳ Đang tải ảnh...</div>
+                  <h6 class="mb-3">Ảnh &amp; Video</h6>
+                  <div v-if="!selectedOutside.media?.length" class="text-muted small mb-3">⏳ Đang tải ảnh...</div>
                   <div class="media-grid">
                     <div v-for="(m, idx) in selectedOutside.media || []" :key="idx" class="media-item position-relative">
-                      <img v-if="m.type === 'image'" :src="m.data" @click="openMediaModal(m)" alt="Ảnh" style="cursor:pointer;">
+                      <img v-if="m.type==='image'" :src="m.data" @click="openMediaModal(m)" alt="Ảnh" style="cursor:pointer;">
                       <video v-else :src="m.data" controls preload="metadata"></video>
                       <span @click.stop="removeMedia(selectedOutside, idx)" class="media-del">×</span>
                     </div>
@@ -1016,114 +895,52 @@ const openDetailModalFull = async (customer) => {
               </div>
             </div>
             <div class="modal-footer">
-              <button @click="deleteCustomer(selectedOutside.id)" class="btn btn-danger">🗑️ Xóa ca</button>
+              <button v-if="isAdmin" @click="deleteCustomer(selectedOutside.id)" class="btn btn-danger">🗑️ Xóa ca</button>
               <button type="button" class="btn btn-secondary" @click="closeOutsideDetailModal">Đóng</button>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- ✅ MODAL CHI TIẾT CHUNG ASVN/CSVN (mọi trạng thái đều click được) -->
-      <div v-if="showDetailModal && selectedCustomer" class="modal fade show" tabindex="-1" style="display: block; background: rgba(0,0,0,0.7);">
-        <div class="modal-dialog modal-xl modal-dialog-centered modal-dialog-scrollable">
+      <!-- ══ MODAL NHẬN CA NGOÀI MỚI ══ -->
+      <div v-if="showOutsideForm" class="modal fade show" tabindex="-1" style="display:block;background:rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-dialog-centered">
           <div class="modal-content">
-            <div class="modal-header text-white"
-              :style="{ backgroundColor: selectedCustomer.status === 0 ? '#3b82f6' : selectedCustomer.status === 1 ? '#f59e0b' : '#198754' }">
-              <h5 class="modal-title">
-                {{ selectedCustomer.ticketId }}
-                <span class="badge ms-2 bg-white fw-bold"
-                  :style="{ color: selectedCustomer.status === 0 ? '#3b82f6' : selectedCustomer.status === 1 ? '#f59e0b' : '#198754' }">
-                  {{ selectedCustomer.status === 0 ? 'Đang làm' : selectedCustomer.status === 1 ? 'Chờ linh kiện' : 'Hoàn thành' }}
-                </span>
-              </h5>
-              <button type="button" class="btn-close btn-close-white" @click="closeDetailModal"></button>
+            <div class="modal-header bg-success text-white">
+              <h5 class="modal-title">Nhận Ca Ngoài Mới</h5>
+              <button type="button" class="btn-close btn-close-white" @click="closeOutsideForm"></button>
             </div>
             <div class="modal-body">
-              <div class="row">
-                <div class="col-md-5">
-                  <h5 class="mb-1 fw-bold">{{ selectedCustomer.name }}</h5>
-                  <p class="text-secondary fw-bold mb-2">📞 {{ selectedCustomer.phone }}</p>
-                  <p v-if="selectedCustomer.warehouse"><strong>Kho:</strong> {{ selectedCustomer.warehouse }}</p>
-                  <p v-if="selectedCustomer.serial"><strong>Serial:</strong> {{ selectedCustomer.serial }}</p>
-                  <p v-if="selectedCustomer.branch"><strong>Chi nhánh:</strong> {{ selectedCustomer.branch }}</p>
-                  <p><strong>Model:</strong> {{ selectedCustomer.model }}</p>
-                  <p><strong>Địa chỉ:</strong> {{ selectedCustomer.address }}</p>
-                  <p><strong>Lỗi:</strong> <span class="text-danger fw-bold">{{ selectedCustomer.issue }}</span></p>
-                  <p><strong>Ngày tạo:</strong> {{ formatDate(selectedCustomer.createdAt) }}</p>
-                  <p v-if="selectedCustomer.doneDate"><strong>Ngày hoàn thành:</strong> {{ selectedCustomer.doneDate }}</p>
-
-                  <!-- ✅ Chuyển trạng thái ngay trong modal -->
-                  <div class="mt-3 mb-3">
-                    <label class="form-label fw-bold">Chuyển trạng thái:</label>
-                    <div class="d-flex gap-2 flex-wrap">
-                      <button @click="changeStatus(selectedCustomer, 0)" :class="['btn fw-bold flex-grow-1', selectedCustomer.status === 0 ? 'btn-primary' : 'btn-outline-primary']">⚡ Đang làm</button>
-                      <button @click="changeStatus(selectedCustomer, 1)" :class="['btn fw-bold flex-grow-1', selectedCustomer.status === 1 ? 'btn-warning' : 'btn-outline-warning']">⏳ Chờ LK</button>
-                      <button @click="changeStatus(selectedCustomer, 2)" :class="['btn fw-bold flex-grow-1', selectedCustomer.status === 2 ? 'btn-success' : 'btn-outline-success']">✅ Xong</button>
-                    </div>
-                  </div>
-
-                  <!-- ✅ Sửa linh kiện ngay trong modal -->
-                  <div class="mt-3">
-                    <label class="form-label fw-bold">Linh kiện thay:</label>
-                    <div class="input-group mb-1">
-                      <input v-model="editingPart2" type="text" class="form-control" placeholder="Nhập linh kiện..." @keyup.enter="savePartInModal">
-                      <button @click="savePartInModal" class="btn btn-success fw-bold">Lưu</button>
-                    </div>
-                    <small class="text-muted">Hiện tại: {{ selectedCustomer.replacedPart || 'Chưa có' }}</small>
-                  </div>
-
-                  <div class="mt-3">
-                    <label class="form-label fw-bold">Link Drive:</label>
-                    <div v-if="!selectedCustomer.folderDrive || isEditingLink[selectedCustomer.id]" class="input-group input-group-sm">
-                      <input v-model="tempFolderLink[selectedCustomer.id]" class="form-control" placeholder="Dán link Google Drive..." @keyup.enter="saveFolderLink(selectedCustomer.id)">
-                      <button @click="saveFolderLink(selectedCustomer.id)" class="btn btn-primary fw-bold">Lưu</button>
-                    </div>
-                    <div v-else class="d-flex gap-2">
-                      <a :href="selectedCustomer.folderDrive" target="_blank" class="btn btn-sm btn-info text-white flex-grow-1 fw-bold">📂 MỞ DRIVE</a>
-                      <button @click="startEditFolder(selectedCustomer.id, selectedCustomer.folderDrive)" class="btn btn-sm btn-light border fw-bold">✏️</button>
-                    </div>
-                  </div>
-                </div>
-                <div class="col-md-7">
-                  <h6 class="mb-3">Ảnh & Video</h6>
-                  <div v-if="!selectedCustomer.media || selectedCustomer.media.length === 0" class="text-muted small mb-3">⏳ Đang tải ảnh...</div>
-                  <div class="media-grid">
-                    <div v-for="(m, idx) in selectedCustomer.media || []" :key="idx" class="media-item position-relative">
-                      <img v-if="m.type === 'image'" :src="m.data" @click="openMediaModal(m)" alt="Ảnh" style="cursor: pointer;">
-                      <video v-else :src="m.data" controls preload="metadata" style="cursor: pointer;"></video>
-                      <span @click.stop="removeMedia(selectedCustomer, idx)" class="media-del">×</span>
-                    </div>
-                    <label class="media-add">
-                      <span>+</span>
-                      <input type="file" hidden multiple accept="image/*,video/*" @change="onFileChange($event, selectedCustomer)">
-                    </label>
-                  </div>
-                  <div class="input-group input-group-sm mt-2">
-                    <input :id="'single-drive-'+selectedCustomer.id" class="form-control" placeholder="Link ảnh lẻ..." @keyup.enter="addSingleDrive(selectedCustomer)">
-                    <button @click="addSingleDrive(selectedCustomer)" class="btn btn-outline-primary">Thêm</button>
-                  </div>
-                </div>
-              </div>
+              <div class="mb-3"><label class="form-label fw-bold">Tên khách hàng</label>
+                <input v-model="outsideForm.name" type="text" class="form-control" placeholder="VD: Anh Hòa, Chị Mai..."></div>
+              <div class="mb-3"><label class="form-label fw-bold">SĐT <span class="text-danger">*</span></label>
+                <input v-model="outsideForm.phone" type="tel" class="form-control" placeholder="0905123456"></div>
+              <div class="mb-3"><label class="form-label fw-bold">Hãng TV</label>
+                <input v-model="outsideForm.brand" type="text" class="form-control" placeholder="Xiaomi, Samsung, LG..."></div>
+              <div class="mb-3"><label class="form-label fw-bold">Model TV</label>
+                <input v-model="outsideForm.model" type="text" class="form-control" placeholder="VD: TV A2 2025"></div>
+              <div class="mb-3"><label class="form-label fw-bold">Tình trạng <span class="text-danger">*</span></label>
+                <textarea v-model="outsideForm.issue" class="form-control" rows="4" placeholder="VD: Màn hình đen..."></textarea></div>
             </div>
             <div class="modal-footer">
-              <button @click="deleteCustomer(selectedCustomer.id)" class="btn btn-danger">🗑️ Xóa ca</button>
-              <button type="button" class="btn btn-secondary" @click="closeDetailModal">Đóng</button>
+              <button type="button" class="btn btn-secondary" @click="closeOutsideForm">Đóng</button>
+              <button type="button" class="btn btn-success" @click="saveOutsideCa">Lưu Ca Ngoài</button>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- MODAL PHÓNG TO MEDIA -->
+      <!-- ══ MODAL PHÓNG TO MEDIA ══ -->
       <div v-if="showModal" class="media-modal-overlay" @click="closeMediaModal">
         <div class="media-modal-content" @click.stop>
           <button class="modal-close" @click="closeMediaModal">×</button>
-          <img v-if="modalMedia?.type === 'image'" :src="modalMedia.data" alt="Ảnh phóng to" class="modal-media">
-          <video v-else-if="modalMedia?.type === 'video'" :src="modalMedia.data" controls autoplay class="modal-media"></video>
+          <img v-if="modalMedia?.type==='image'" :src="modalMedia.data" alt="Ảnh phóng to" class="modal-media">
+          <video v-else-if="modalMedia?.type==='video'" :src="modalMedia.data" controls autoplay class="modal-media"></video>
         </div>
       </div>
 
-      <!-- MODAL CHỌN LINH KIỆN -->
-      <div v-if="showPartModal" class="modal fade show" tabindex="-1" style="display: block; background: rgba(0,0,0,0.5);">
+      <!-- ══ MODAL CHỌN LINH KIỆN ══ -->
+      <div v-if="showPartModal" class="modal fade show" tabindex="-1" style="display:block;background:rgba(0,0,0,0.5);">
         <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
           <div class="modal-content">
             <div class="modal-header">
@@ -1140,7 +957,7 @@ const openDetailModalFull = async (customer) => {
                 </button>
               </div>
               <div v-else>
-                <p class="text-muted mb-3">Nhập tên linh kiện thay thế:</p>
+                <p class="text-muted mb-3">Nhập tên linh kiện:</p>
                 <input v-model="customPartInput" type="text" class="form-control form-control-lg mb-3"
                   placeholder="VD: Thay loa, Thay remote..." @keyup.enter="confirmCustomPart" autofocus>
                 <div class="d-flex gap-2">
@@ -1156,8 +973,8 @@ const openDetailModalFull = async (customer) => {
         </div>
       </div>
 
-      <!-- MODAL CA TRỄ -->
-      <div v-if="showTreModal" class="modal fade show" tabindex="-1" style="display: block; background: rgba(0,0,0,0.5);">
+      <!-- ══ MODAL CA TRỄ ══ -->
+      <div v-if="showTreModal" class="modal fade show" tabindex="-1" style="display:block;background:rgba(0,0,0,0.5);">
         <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">
           <div class="modal-content">
             <div class="modal-header bg-warning text-dark">
@@ -1189,8 +1006,8 @@ const openDetailModalFull = async (customer) => {
         </div>
       </div>
 
-      <!-- MODAL TÍNH HÀNH TRÌNH -->
-      <div v-if="showRouteModal" class="modal fade show" tabindex="-1" style="display: block; background: rgba(0,0,0,0.7); overflow-y: auto;">
+      <!-- ══ MODAL HÀNH TRÌNH ══ -->
+      <div v-if="showRouteModal" class="modal fade show" tabindex="-1" style="display:block;background:rgba(0,0,0,0.7);overflow-y:auto;">
         <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
           <div class="modal-content">
             <div class="modal-header bg-info text-white">
@@ -1202,21 +1019,20 @@ const openDetailModalFull = async (customer) => {
                 <label class="form-label fw-bold">Địa chỉ hiện tại của bạn:</label>
                 <div class="input-group">
                   <input v-model="currentLocation" type="text" class="form-control"
-                    placeholder="VD: 123 Nguyễn Văn Linh, Thanh Khê, Đà Nẵng"
-                    @keyup.enter="calculateRoute">
+                    placeholder="VD: 123 Nguyễn Văn Linh, Đà Nẵng" @keyup.enter="calculateRoute">
                   <button @click="calculateRoute" :disabled="isLoadingRoute" class="btn btn-info fw-bold">
                     {{ isLoadingRoute ? '⏳ Đang tính...' : '🚀 Tính tuyến đường' }}
                   </button>
                 </div>
               </div>
               <div v-if="currentCoords" class="alert alert-success mb-4">
-                ✅ Vị trí hiện tại: <strong>{{ currentCoords.displayName || `${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)}` }}</strong>
+                ✅ Vị trí: <strong>{{ currentCoords.displayName || `${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)}` }}</strong>
               </div>
               <div v-if="isLoadingRoute" class="text-center py-5">
-                <div class="spinner-border text-info" role="status" style="width: 3rem; height: 3rem;"></div>
+                <div class="spinner-border text-info" style="width:3rem;height:3rem;"></div>
                 <p class="mt-3 fw-bold">Đang tính toán khoảng cách...</p>
               </div>
-              <div v-else-if="routeCustomers.length > 0">
+              <div v-else-if="routeCustomers.length">
                 <h6 class="mb-3 fw-bold">Thứ tự gợi ý (gần nhất → xa nhất):</h6>
                 <div class="list-group">
                   <button v-for="(item, idx) in routeCustomers" :key="item.id"
@@ -1252,127 +1068,127 @@ const openDetailModalFull = async (customer) => {
 </template>
 
 <style scoped>
-/* === TOAST === */
-.toast-container {
-  position: fixed;
-  top: 1rem;
-  right: 1rem;
-  z-index: 9999;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  max-width: 320px;
-}
-.toast-item {
-  padding: 0.75rem 1.25rem;
-  border-radius: 12px;
-  font-weight: 600;
-  font-size: 0.9rem;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-  animation: slideIn 0.3s ease-out;
-  color: white;
-}
-.toast-success { background: #10b981; }
-.toast-error { background: #ef4444; }
-.toast-warning { background: #f59e0b; }
-@keyframes slideIn {
-  from { opacity: 0; transform: translateX(100%); }
-  to { opacity: 1; transform: translateX(0); }
+/* ── Auth loading ─────────────────────────────────────────── */
+.auth-loading {
+  min-height: 100vh; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #f1f5f9, #e2e8f0);
 }
 
-/* === LAYOUT === */
-.btn-sm.text-danger { color: #dc3545 !important; }
-.btn-sm.text-danger:hover { color: #b02a37 !important; }
-.page-wrap { min-height: 100vh; padding: 2rem 1rem; background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%); font-family: system-ui, -apple-system, sans-serif; }
-.layout { max-width: 1450px; margin: 0 auto; display: flex; flex-direction: column; gap: 1.5rem; width: 100%; }
-.control-card, .cases-section { background: white; border-radius: 20px; padding: 1.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; width: 100%; }
+/* ── Topbar ───────────────────────────────────────────────── */
+.topbar {
+  display: flex; justify-content: space-between; align-items: center;
+  background: #1e293b; color: #fff;
+  padding: 0.6rem 1.25rem; position: sticky; top: 0; z-index: 100;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+}
+.topbar-left  { display: flex; align-items: center; gap: 0.6rem; }
+.topbar-logo  { font-size: 1.4rem; }
+.topbar-appname { font-weight: 800; font-size: 1rem; letter-spacing: -0.02em; }
+.role-chip    { padding: 0.2rem 0.65rem; border-radius: 20px; font-size: 0.75rem; font-weight: 700; }
+.role-admin   { background: #fef3c7; color: #92400e; }
+.role-nv      { background: #dbeafe; color: #1d4ed8; }
+.topbar-right { display: flex; align-items: center; gap: 0.6rem; }
+.topbar-user  { font-size: 0.85rem; color: #94a3b8; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn-topbar   { background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 0.35rem 0.75rem; font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all .2s; }
+.btn-topbar:hover { background: rgba(255,255,255,0.2); }
+.btn-topbar--active { background: #3b82f6; border-color: #3b82f6; }
+.btn-topbar--logout { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.4); }
+.btn-topbar--logout:hover { background: rgba(239,68,68,0.3); }
+
+/* ── Admin Panel wrap ─────────────────────────────────────── */
+.admin-panel-wrap {
+  max-width: 1450px; margin: 0 auto;
+  background: #fff; border-bottom: 2px solid #e2e8f0;
+  padding: 1.25rem 1.5rem;
+}
+
+/* ── Toast ────────────────────────────────────────────────── */
+.toast-container { position: fixed; top: 4.5rem; right: 1rem; z-index: 9999; display: flex; flex-direction: column; gap: 0.5rem; max-width: 320px; }
+.toast-item { padding: 0.75rem 1.25rem; border-radius: 12px; font-weight: 600; font-size: 0.9rem; box-shadow: 0 4px 12px rgba(0,0,0,0.15); color: #fff; animation: slideIn .3s ease-out; }
+.toast-success { background: #10b981; }
+.toast-error   { background: #ef4444; }
+.toast-warning { background: #f59e0b; }
+@keyframes slideIn { from { opacity:0; transform:translateX(100%); } to { opacity:1; transform:translateX(0); } }
+
+/* ── Layout ───────────────────────────────────────────────── */
+.page-wrap { min-height: 100vh; background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%); font-family: system-ui, -apple-system, sans-serif; }
+.layout { max-width: 1450px; margin: 0 auto; padding: 1.5rem 1rem; display: flex; flex-direction: column; gap: 1.5rem; }
+.control-card, .cases-section { background: #fff; border-radius: 20px; padding: 1.5rem; box-shadow: 0 4px 6px -1px rgba(0,0,0,.05), 0 2px 4px -1px rgba(0,0,0,.1); border: 1px solid #e2e8f0; }
+
+/* ── Buttons/Toggles ──────────────────────────────────────── */
 .toggle-row, .status-toggle-row, .warehouse-toggle-row { display: flex; gap: 0.75rem; margin-bottom: 1rem; }
-.toggle-row button, .status-toggle-row button { flex: 1; padding: 0.875rem 1rem; border-radius: 12px; font-size: 1rem; font-weight: 600; transition: all 0.3s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.08); border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
-.toggle-row button:hover, .status-toggle-row button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+.toggle-row button, .status-toggle-row button { flex: 1; padding: 0.875rem 1rem; border-radius: 12px; font-size: 1rem; font-weight: 600; transition: all .3s; box-shadow: 0 2px 4px rgba(0,0,0,.08); border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; gap: 0.5rem; }
+.toggle-row button:hover, .status-toggle-row button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.15); }
 .warehouse-toggle-row { align-items: center; }
 .gear-container { flex-shrink: 0; margin-right: 0.5rem; }
-.btn-gear { width: 40px; height: 40px; border-radius: 50%; background: #f3f4f6; border: 1px solid #d1d5db; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; cursor: pointer; transition: all 0.2s ease; }
+.btn-gear { width: 40px; height: 40px; border-radius: 50%; background: #f3f4f6; border: 1px solid #d1d5db; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; cursor: pointer; transition: all .2s; }
 .btn-gear:hover { background: #e5e7eb; transform: scale(1.05); }
 .warehouse-buttons { flex: 1; display: flex; gap: 0.5rem; }
-.warehouse-buttons button { flex: 1; padding: 0.75rem 1rem; border-radius: 10px; font-weight: 600; transition: all 0.3s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
-.warehouse-buttons button:hover { transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.12); }
+.warehouse-buttons button { flex: 1; padding: 0.75rem 1rem; border-radius: 10px; font-weight: 600; transition: all .3s; }
+
+/* ── Control body ─────────────────────────────────────────── */
 .control-body { background: #f8f9fa; border-radius: 12px; padding: 1.25rem; border: 1px solid #e5e7eb; }
 .control-actions { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.75rem; margin-top: 1rem; }
 .control-actions input { grid-column: span 3; padding: 0.875rem; font-size: 1rem; }
+
+/* ── Cases ────────────────────────────────────────────────── */
 .section-header { margin-bottom: 1.5rem; text-align: center; }
 .section-title { font-weight: 800; color: #1e293b; font-size: 1.6rem; margin: 0; letter-spacing: -0.025em; }
-.case-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.25rem; width: 100%; }
-.case-card { animation: fadeIn 0.4s ease-out; transition: all 0.3s ease; border-radius: 16px; overflow: hidden; background: white; }
-.case-card:hover { transform: translateY(-4px); box-shadow: 0 10px 25px rgba(0,0,0,0.1) !important; }
-.card { transition: all 0.3s ease; border: 1px solid #e2e8f0 !important; border-radius: 16px; height: 100%; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-.card-body { padding: 1.5rem; display: flex; flex-direction: column; }
-.border-primary { border-left-color: #3b82f6 !important; }
-.border-warning { border-left-color: #f59e0b !important; }
-.border-success { border-left-color: #10b981 !important; }
+.case-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.25rem; }
+.case-card { animation: fadeIn .4s ease-out; transition: all .3s; border-radius: 16px; overflow: hidden; }
+.case-card:hover { transform: translateY(-4px); box-shadow: 0 10px 25px rgba(0,0,0,.1) !important; }
+.card { border: 1px solid #e2e8f0 !important; border-radius: 16px; height: 100%; }
+.card-body { padding: 1.5rem; }
 .info-content { flex: 1; display: flex; flex-direction: column; gap: 0.5rem; font-size: 1rem; }
 .info-content .fw-bold { font-size: 1.1rem; line-height: 1.3; }
-.text-danger { color: #ef4444 !important; }
-.text-info { color: #0ea5e9 !important; }
+
+/* ── Media grid ───────────────────────────────────────────── */
 .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(60px, 1fr)); gap: 0.75rem; margin: 1rem 0; }
-.media-item { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.08); }
-.media-item img, .media-item video { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; cursor: pointer; transition: transform 0.2s ease; }
-.media-item:hover img, .media-item:hover video { transform: scale(1.05); }
-.media-del { position: absolute; top: -6px; right: -6px; background: #ef4444; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; cursor: pointer; z-index: 10; font-weight: bold; }
-.media-add { aspect-ratio: 1; border: 2px dashed #cbd5e0; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #94a3b8; font-size: 24px; transition: all 0.2s ease; }
+.media-item { position: relative; aspect-ratio: 1; border-radius: 8px; overflow: hidden; }
+.media-item img, .media-item video { width: 100%; height: 100%; object-fit: cover; cursor: pointer; }
+.media-del { position: absolute; top: -6px; right: -6px; background: #ef4444; color: #fff; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 12px; cursor: pointer; z-index: 10; font-weight: bold; }
+.media-add { aspect-ratio: 1; border: 2px dashed #cbd5e0; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #94a3b8; font-size: 24px; transition: all .2s; }
 .media-add:hover { border-color: #3b82f6; background: #eff6ff; color: #3b82f6; }
-.date-pill { background: linear-gradient(135deg, #10b981, #059669); color: white; padding: 0.5rem 1rem; border-radius: 20px; font-weight: 600; font-size: 0.9rem; box-shadow: 0 2px 4px rgba(16,185,129,0.3); }
-@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-.media-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.9); display: flex; align-items: center; justify-content: center; z-index: 1000; cursor: pointer; }
-.media-modal-content { position: relative; max-width: 95vw; max-height: 95vh; background: #000; border-radius: 12px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.6); }
+
+/* ── Date pill ────────────────────────────────────────────── */
+.date-pill { background: linear-gradient(135deg, #10b981, #059669); color: #fff; padding: 0.5rem 1rem; border-radius: 20px; font-weight: 600; font-size: 0.9rem; }
+
+/* ── Media modal ──────────────────────────────────────────── */
+.media-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.9); display: flex; align-items: center; justify-content: center; z-index: 1000; cursor: pointer; }
+.media-modal-content { position: relative; max-width: 95vw; max-height: 95vh; background: #000; border-radius: 12px; overflow: hidden; }
 .modal-media { max-width: 100%; max-height: 95vh; object-fit: contain; display: block; }
-.modal-close { position: absolute; top: 15px; right: 15px; background: rgba(0,0,0,0.5); color: white; border: none; font-size: 28px; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; z-index: 10; }
-.modal-close:hover { background: rgba(255,0,0,0.8); }
+.modal-close { position: absolute; top: 15px; right: 15px; background: rgba(0,0,0,.5); color: #fff; border: none; font-size: 28px; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; z-index: 10; }
+.modal-close:hover { background: rgba(255,0,0,.8); }
+
+/* ── Misc ─────────────────────────────────────────────────── */
 .modal-xl { max-width: 1100px; }
 .btn-close-white { filter: invert(1); }
-.btn-info { background-color: #17a2b8; border-color: #17a2b8; }
-.list-group-item-action:hover { background-color: #f8f9fa; }
-.list-group-item-warning { background-color: #fff3cd !important; border-left: 5px solid #ffc107 !important; }
+.text-danger { color: #ef4444 !important; }
+.text-info   { color: #0ea5e9 !important; }
+@keyframes fadeIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
 
-/* ✅ Mobile responsive tốt hơn cho tab labels */
+/* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 480px) {
   .tab-label { display: none; }
   .status-toggle-row button { font-size: 0.85rem; padding: 0.6rem 0.4rem; }
-}
-
-@media (min-width: 769px) and (max-width: 1023px) {
-  .case-strip { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
-  .control-actions { grid-template-columns: 1fr 1fr; }
-  .control-actions input { grid-column: span 2; }
-  .toggle-row, .status-toggle-row, .warehouse-toggle-row { gap: 0.5rem; }
-  .section-title { font-size: 1.4rem; }
+  .topbar-user { display: none; }
+  .modal-dialog { margin: 0.5rem; max-width: calc(100% - 1rem); }
 }
 @media (max-width: 768px) {
-  .page-wrap { padding: 1rem 0.5rem; }
-  .layout { gap: 1rem; max-width: 100%; }
+  .layout { padding: 1rem 0.5rem; gap: 1rem; }
   .control-card, .cases-section { padding: 1rem; border-radius: 16px; }
-  .toggle-row, .status-toggle-row { flex-direction: row; gap: 0.5rem; }
-  .toggle-row button, .status-toggle-row button { flex: 1; padding: 0.75rem 0.5rem; min-height: 48px; font-size: 0.85rem; }
-  .warehouse-toggle-row { flex-direction: column; align-items: stretch; gap: 0.75rem; }
-  .gear-container { align-self: flex-start; margin: 0; }
-  .btn-gear { width: 50px; height: 50px; font-size: 1.5rem; }
-  .warehouse-buttons { flex-direction: row; gap: 0.5rem; width: 100%; }
-  .warehouse-buttons button { width: 100%; padding: 0.875rem; min-height: 50px; }
-  .control-body { padding: 1rem; }
-  .control-actions { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
-  .control-actions input { grid-column: span 2; font-size: 1rem; padding: 0.875rem; }
-  .case-strip { grid-template-columns: 1fr; gap: 1.25rem; }
-  .card-body { padding: 1.25rem; }
+  .toggle-row, .status-toggle-row { gap: 0.5rem; }
+  .toggle-row button, .status-toggle-row button { flex: 1; padding: 0.75rem 0.5rem; font-size: 0.85rem; }
+  .warehouse-toggle-row { flex-direction: column; align-items: stretch; }
+  .warehouse-buttons { flex-direction: row; }
+  .control-actions { grid-template-columns: 1fr 1fr; }
+  .control-actions input { grid-column: span 2; }
+  .case-strip { grid-template-columns: 1fr; }
   .section-title { font-size: 1.25rem; }
   .toast-container { max-width: calc(100vw - 2rem); }
 }
-@media (max-width: 480px) {
-  .modal-dialog { margin: 0.5rem; max-width: calc(100% - 1rem); }
-  .modal-content { border-radius: 12px; }
-  .media-modal-content { max-width: 100vw; max-height: 100vh; border-radius: 0; }
-  .modal-close { font-size: 24px; width: 36px; height: 36px; }
-}
 @media (min-width: 1200px) {
   .case-strip { grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); }
-  .control-actions { grid-template-columns: 1fr 1fr 1fr; }
 }
 </style>
