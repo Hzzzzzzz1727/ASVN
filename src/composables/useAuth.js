@@ -76,9 +76,18 @@ export const useAuth = () => {
 
   // ── LOGOUT ───────────────────────────────────────────────────
   const logout = async () => {
-    await supabase.auth.signOut()
+    // Timeout 3s: nếu Supabase bị treo (token hết hạn) thì force logout luôn
+    try {
+      await Promise.race([
+        supabase.auth.signOut(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+      ])
+    } catch (_) {
+      // signOut bị treo hoặc lỗi → bỏ qua, force clear session
+    }
     currentUser.value    = null
     currentProfile.value = null
+    lockMessage.value    = ''
   }
 
   // ── ADMIN: Tạo tài khoản nhân viên ──────────────────────────
