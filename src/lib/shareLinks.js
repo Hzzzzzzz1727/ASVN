@@ -16,7 +16,12 @@ export const getBaseAppUrl = () => {
 
 export const buildPublicShareUrl = (token) => `${getBaseAppUrl()}share.html?token=${encodeURIComponent(token)}`
 
-export const buildShareAdminUrl = (customerId) => `${getBaseAppUrl()}share-admin.html?id=${encodeURIComponent(customerId)}`
+export const buildShareAdminUrl = (customerId) => {
+  const url = new URL(`${getBaseAppUrl()}share-admin.html`)
+  url.searchParams.set('id', customerId)
+  url.searchParams.set('source_origin', location.origin)
+  return url.toString()
+}
 
 export const normalizeShareRecord = (record) => {
   if (!record) return null

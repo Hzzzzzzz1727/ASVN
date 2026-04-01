@@ -596,7 +596,7 @@ const saveOutsideCa = async () => {
     model: `${outsideForm.value.brand} ${outsideForm.value.model}`.trim() || 'Chưa rõ',
     address: 'Ca ngoài - không có địa chỉ', issue: outsideForm.value.issue,
     media: [], folderDrive: '', status: 0, replacedPart: 'Chưa có linh kiện thay',
-    doneDate: null, createdAt: now.toISOString(), warehouse: 'TDP',
+    doneDate: null, createdAt: now.toISOString(), warehouse: 'TDP', customer_note: '',
     warranty_months: null, warranty_start_at: null, warranty_expires_at: null
   }
   const { error } = await supabase.from('customers').insert([newCa])
@@ -708,6 +708,34 @@ const saveOutsidePart = async () => {
   selectedOutside.value.replacedPart = editingOutsidePart.value
   updateLocalCustomer(selectedOutside.value.id, { replacedPart: editingOutsidePart.value })
   showToast('Đã lưu linh kiện!', 'success')
+}
+const saveCustomerNote = async () => {
+  if (!selectedCustomer.value) return
+  try {
+    await ensureSession()
+    const updates = { customer_note: (selectedCustomer.value.customer_note || '').trim() }
+    const { error } = await supabase.from('customers').update(updates).eq('id', selectedCustomer.value.id)
+    if (error) throw error
+    selectedCustomer.value = { ...selectedCustomer.value, ...updates }
+    updateLocalCustomer(selectedCustomer.value.id, updates)
+    showToast('Đã lưu ghi chú ca!', 'success')
+  } catch (e) {
+    showToast('Không lưu được ghi chú: ' + (e?.message || 'Unknown error'), 'error')
+  }
+}
+const saveOutsideNote = async () => {
+  if (!selectedOutside.value) return
+  try {
+    await ensureSession()
+    const updates = { customer_note: (selectedOutside.value.customer_note || '').trim() }
+    const { error } = await supabase.from('customers').update(updates).eq('id', selectedOutside.value.id)
+    if (error) throw error
+    selectedOutside.value = { ...selectedOutside.value, ...updates }
+    updateLocalCustomer(selectedOutside.value.id, updates)
+    showToast('Đã lưu ghi chú ca ngoài!', 'success')
+  } catch (e) {
+    showToast('Không lưu được ghi chú: ' + (e?.message || 'Unknown error'), 'error')
+  }
 }
 
 // ── XÓA CA (chỉ admin) ───────────────────────────────────────
@@ -1025,11 +1053,77 @@ const openShareManager = (customer) => {
     showToast('Chỉ admin mới được quản lý link xem!', 'error')
     return
   }
-  window.open(buildShareAdminUrl(customer.id), '_blank', 'noopener')
+  window.open(buildShareAdminUrl(customer.id), '_blank')
+}
+
+const isTrustedShareAdminOrigin = (origin) => {
+  try {
+    const current = new URL(location.origin)
+    const incoming = new URL(origin)
+    return current.protocol === incoming.protocol && current.hostname === incoming.hostname
+  } catch {
+    return false
+  }
+}
+
+const handleShareAdminSessionRequest = async (event) => {
+  if (!event?.data || event.data?.type !== 'tv-repair:request-admin-session') return
+  if (!isTrustedShareAdminOrigin(event.origin)) return
+  if (event.data?.targetOrigin !== location.origin) return
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.access_token || !session?.refresh_token) {
+      event.source?.postMessage({
+        type: 'tv-repair:admin-session-response',
+        ok: false,
+      }, event.origin)
+      return
+    }
+
+    event.source?.postMessage({
+      type: 'tv-repair:admin-session-response',
+      ok: true,
+      session: {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+      },
+    }, event.origin)
+  } catch {
+    event.source?.postMessage({
+      type: 'tv-repair:admin-session-response',
+      ok: false,
+    }, event.origin)
+  }
+}
+
+const handleShareAdminBroadcastRequest = async (event) => {
+  if (!event?.data || event.data?.type !== 'tv-repair:broadcast-request-admin-session') return
+  if (event.data?.targetOrigin !== location.origin) return
+
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session?.access_token || !session?.refresh_token) {
+      return
+    }
+
+    const channel = new BroadcastChannel('tv-repair-share-admin-auth')
+    channel.postMessage({
+      type: 'tv-repair:broadcast-admin-session-response',
+      requestId: event.data.requestId,
+      session: {
+        access_token: session.access_token,
+        refresh_token: session.refresh_token,
+      },
+    })
+    channel.close()
+  } catch {}
 }
 
 // ── MOUNTED ───────────────────────────────────────────────────
 onMounted(async () => {
+  window.addEventListener('message', handleShareAdminSessionRequest)
+  window.addEventListener('message', handleShareAdminBroadcastRequest)
   await initAuth()
   if (isLoggedIn.value) {
     await loadData()
@@ -1131,6 +1225,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('message', handleShareAdminSessionRequest)
+  window.removeEventListener('message', handleShareAdminBroadcastRequest)
   window.removeEventListener('resize', syncMobileControlForViewport)
 })
 </script>
@@ -1642,6 +1738,18 @@ onUnmounted(() => {
                     </div>
                   </div>
                   <div class="mt-3">
+                    <label class="form-label fw-bold">Ghi chú ca:</label>
+                    <div class="input-group input-group-sm">
+                      <textarea
+                        v-model="selectedCustomer.customer_note"
+                        class="form-control"
+                        rows="3"
+                        placeholder="Nhập ghi chú thêm cho ca này..."
+                      ></textarea>
+                      <button @click="saveCustomerNote" class="btn btn-outline-primary fw-bold">Lưu ghi chú</button>
+                    </div>
+                  </div>
+                  <div class="mt-3">
                     <label class="form-label fw-bold">Link Drive:</label>
                     <div v-if="!selectedCustomer.folderDrive || isEditingLink[selectedCustomer.id]" class="input-group input-group-sm">
                       <input v-model="tempFolderLink[selectedCustomer.id]" class="form-control" placeholder="Dán link Google Drive..." @keyup.enter="saveFolderLink(selectedCustomer.id)">
@@ -1779,6 +1887,18 @@ onUnmounted(() => {
                         <input v-model.number="customWarrantyMonths" type="number" min="1" class="form-control" placeholder="Nhập số tháng bảo hành...">
                         <button @click="saveCustomWarrantyFor(selectedOutside)" class="btn btn-primary fw-bold">Lưu</button>
                       </div>
+                    </div>
+                  </div>
+                  <div class="mt-3">
+                    <label class="form-label fw-bold">Ghi chú ca ngoài:</label>
+                    <div class="input-group input-group-sm">
+                      <textarea
+                        v-model="selectedOutside.customer_note"
+                        class="form-control"
+                        rows="3"
+                        placeholder="Nhập ghi chú thêm cho ca ngoài..."
+                      ></textarea>
+                      <button @click="saveOutsideNote" class="btn btn-outline-primary fw-bold">Lưu ghi chú</button>
                     </div>
                   </div>
                   <div class="mt-3">

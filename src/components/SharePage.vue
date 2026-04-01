@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { getPublicShareSupabase } from '@/lib/publicShareSupabase'
 
 const supabase = getPublicShareSupabase()
@@ -8,8 +8,37 @@ const loading = ref(true)
 const error = ref('')
 const sharePayload = ref(null)
 const shareUpdatedAt = ref('')
+const previewMedia = ref(null)
+let reloadTimer = null
 
 const customer = computed(() => sharePayload.value || null)
+const customerMedia = computed(() => {
+  const media = Array.isArray(customer.value?.media) ? customer.value.media : []
+  return media.map((item) => {
+    if (!item) return null
+    if (item.source === 'storage' && item.path) {
+      const { data } = supabase.storage.from('media').getPublicUrl(item.path)
+      return {
+        ...item,
+        type: item.type || 'image',
+        data: data?.publicUrl || '',
+      }
+    }
+    if (item.path && !item.data) {
+      const { data } = supabase.storage.from('media').getPublicUrl(item.path)
+      return {
+        ...item,
+        source: 'storage',
+        type: item.type || 'image',
+        data: data?.publicUrl || '',
+      }
+    }
+    if (item.data) {
+      return { ...item, type: item.type || 'image' }
+    }
+    return null
+  }).filter((item) => item?.data)
+})
 
 const DETAIL_ICONS = {
   customer: 'Nguoi',
@@ -18,6 +47,7 @@ const DETAIL_ICONS = {
   serial: 'SN',
   issue: 'Loi',
   part: 'LK',
+  note: 'GC',
   address: 'Dia',
   created: 'Tao',
   done: 'Xong',
@@ -53,8 +83,17 @@ const formatPrice = (value) => {
   return amount > 0 ? `${amount.toLocaleString('vi-VN')}d` : '0d'
 }
 
+const openMediaPreview = (item) => {
+  previewMedia.value = item
+}
+
+const closeMediaPreview = () => {
+  previewMedia.value = null
+}
+
 const loadPublicShare = async () => {
-  loading.value = true
+  const isFirstLoad = !sharePayload.value
+  if (isFirstLoad) loading.value = true
   error.value = ''
 
   try {
@@ -84,11 +123,32 @@ const loadPublicShare = async () => {
     console.error('[SharePage]', err)
     error.value = err?.message || 'Khong mo duoc link xem nay.'
   } finally {
-    loading.value = false
+    if (isFirstLoad) loading.value = false
   }
 }
 
-onMounted(loadPublicShare)
+const handleVisibilityChange = () => {
+  if (document.visibilityState === 'visible') {
+    loadPublicShare()
+  }
+}
+
+onMounted(() => {
+  loadPublicShare()
+  reloadTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') {
+      loadPublicShare()
+    }
+  }, 30000)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  window.addEventListener('focus', loadPublicShare)
+})
+
+onUnmounted(() => {
+  if (reloadTimer) window.clearInterval(reloadTimer)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  window.removeEventListener('focus', loadPublicShare)
+})
 </script>
 
 <template>
@@ -150,6 +210,10 @@ onMounted(loadPublicShare)
               <span class="detail-label"><span class="detail-icon">{{ DETAIL_ICONS.part }}</span>Linh kien</span>
               <span class="detail-value">{{ customer.replacedPart }}</span>
             </div>
+            <div class="detail-row" v-if="customer.customer_note">
+              <span class="detail-label"><span class="detail-icon">{{ DETAIL_ICONS.note }}</span>Ghi chu</span>
+              <span class="detail-value">{{ customer.customer_note }}</span>
+            </div>
             <div class="detail-row" v-if="customer.address">
               <span class="detail-label"><span class="detail-icon">{{ DETAIL_ICONS.address }}</span>Dia chi</span>
               <span class="detail-value">{{ customer.address }}</span>
@@ -200,6 +264,31 @@ onMounted(loadPublicShare)
             </div>
           </div>
         </section>
+
+        <section v-if="customerMedia.length" class="detail-card detail-card--soft">
+          <div class="section-title"><span class="section-icon">{{ DETAIL_ICONS.model }}</span>Anh va video</div>
+          <div class="media-grid">
+            <button
+              v-for="(item, index) in customerMedia"
+              :key="`${item.data}-${index}`"
+              type="button"
+              class="media-tile"
+              @click="openMediaPreview(item)"
+            >
+              <img v-if="item.type !== 'video'" :src="item.data" alt="Anh ca sua chua" loading="lazy">
+              <video v-else :src="item.data" preload="metadata" playsinline></video>
+              <span v-if="item.type === 'video'" class="media-badge">Video</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div v-if="previewMedia" class="preview-overlay" @click="closeMediaPreview">
+      <div class="preview-shell" @click.stop>
+        <button type="button" class="preview-close" @click="closeMediaPreview">×</button>
+        <img v-if="previewMedia.type !== 'video'" :src="previewMedia.data" alt="Anh phong to" class="preview-content">
+        <video v-else :src="previewMedia.data" controls autoplay playsinline class="preview-content"></video>
       </div>
     </div>
   </div>
@@ -426,6 +515,83 @@ onMounted(loadPublicShare)
   font-size: 1rem;
 }
 
+.media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.media-tile {
+  position: relative;
+  border: 0;
+  padding: 0;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #dbeafe;
+  aspect-ratio: 1;
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.2);
+  cursor: pointer;
+}
+
+.media-tile img,
+.media-tile video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.media-badge {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.78);
+  color: #fff;
+  padding: 6px 10px;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.86);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  z-index: 30;
+}
+
+.preview-shell {
+  position: relative;
+  max-width: min(980px, 100%);
+  max-height: 100%;
+}
+
+.preview-content {
+  max-width: 100%;
+  max-height: calc(100vh - 48px);
+  border-radius: 20px;
+  display: block;
+  background: #000;
+}
+
+.preview-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(15, 23, 42, 0.72);
+  color: #fff;
+  font-size: 1.4rem;
+  cursor: pointer;
+}
+
 @media (max-width: 640px) {
   .hero-card,
   .detail-card {
@@ -498,6 +664,11 @@ onMounted(loadPublicShare)
 
   .section-title {
     margin-bottom: 12px;
+  }
+
+  .media-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
   }
 }
 

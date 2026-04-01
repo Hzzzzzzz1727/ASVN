@@ -22,6 +22,61 @@ const customerId = ref(null)
 
 const publicUrl = computed(() => shareRecord.value?.publicUrl || '')
 
+const requestSessionFromOpener = async (sourceOrigin) => {
+  if (!sourceOrigin) return null
+
+  return await new Promise((resolve) => {
+    let settled = false
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const channel = new BroadcastChannel('tv-repair-share-admin-auth')
+
+    const cleanup = () => {
+      window.removeEventListener('message', handleMessage)
+      channel.removeEventListener('message', handleBroadcast)
+      channel.close()
+      window.clearTimeout(timeoutId)
+    }
+
+    const finish = (payload) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(payload)
+    }
+
+    const handleMessage = (event) => {
+      if (event.origin !== sourceOrigin) return
+      if (event.data?.type !== 'tv-repair:admin-session-response') return
+      finish(event.data?.ok ? event.data.session || null : null)
+    }
+
+    const handleBroadcast = (event) => {
+      if (event.data?.type !== 'tv-repair:broadcast-admin-session-response') return
+      if (event.data?.requestId !== requestId) return
+      finish(event.data.session || null)
+    }
+
+    const timeoutId = window.setTimeout(() => finish(null), 2500)
+    window.addEventListener('message', handleMessage)
+    channel.addEventListener('message', handleBroadcast)
+
+    try {
+      if (window.opener) {
+        window.opener.postMessage({
+          type: 'tv-repair:request-admin-session',
+          targetOrigin: sourceOrigin,
+        }, sourceOrigin)
+      }
+    } catch {}
+
+    channel.postMessage({
+      type: 'tv-repair:broadcast-request-admin-session',
+      targetOrigin: sourceOrigin,
+      requestId,
+    })
+  })
+}
+
 const ADMIN_ICONS = {
   customer: 'Nguoi',
   phone: 'Goi',
@@ -44,7 +99,23 @@ const formatDateTime = (value) => {
 }
 
 const ensureAdmin = async () => {
-  const { data: { session } } = await supabase.auth.getSession()
+  let { data: { session } } = await supabase.auth.getSession()
+  if (!session) {
+    const { data, error } = await supabase.auth.refreshSession()
+    if (!error) {
+      session = data?.session || null
+    }
+  }
+  if (!session) {
+    const sourceOrigin = new URLSearchParams(location.search).get('source_origin')?.trim()
+    const openerSession = await requestSessionFromOpener(sourceOrigin)
+    if (openerSession?.access_token && openerSession?.refresh_token) {
+      const { data, error } = await supabase.auth.setSession(openerSession)
+      if (!error) {
+        session = data?.session || null
+      }
+    }
+  }
   const userId = session?.user?.id
   if (!userId) throw new Error('Can dang nhap admin de quan ly link xem.')
 
